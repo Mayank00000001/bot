@@ -18,6 +18,8 @@ pairs:
 cascades:
   - htf: "4h"
     ltf: "15min"
+  - htf: "2h"
+    ltf: "30min"
   - htf: "1h"
     ltf: "5min"
 
@@ -32,7 +34,7 @@ strategy:
 # Twelve Data free tier = 800 calls/day
 # 10 pairs x 4 cascades x 2 TFs = 80 calls per scan
 # scan_interval = 900s (15 min) = safe for free tier
-scan_interval_seconds: 900
+scan_interval_seconds: 600
 
 chart:
   output_dir: "charts"
