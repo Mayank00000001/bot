@@ -10,21 +10,16 @@ telegram:
   chat_id: "YOUR_CHAT_ID"              # @userinfobot se
 
 pairs:
-  - "XAU/USD"     # Gold — primary
-  - "EUR/USD"
-  - "GBP/USD"
-  - "USD/JPY"
-  - "AUD/USD"
-  - "USD/CAD"
-  - "GBP/JPY"
+  - "XAU/USD"     # Gold
+  - "SPX"         # S&P 500
+  - "NDX"         # Nasdaq 100
+  - "BTC/USD"     # Bitcoin
 
 cascades:
-  - htf: "1week"
-    ltf: "4h"
-  - htf: "1day"
-    ltf: "1h"
   - htf: "4h"
     ltf: "15min"
+  - htf: "2h"
+    ltf: "30min"
   - htf: "1h"
     ltf: "5min"
 
