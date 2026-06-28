@@ -1,0 +1,10 @@
+# Railway.app deployment config
+# Yeh file railway.app par auto-deploy ke liye hai
+
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "python main.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

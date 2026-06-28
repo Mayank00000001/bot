@@ -1,0 +1,46 @@
+# ================================================
+# Forex Signal Bot — Config
+# ================================================
+
+twelve_data:
+  api_key: "YOUR_TWELVE_DATA_API_KEY"   # twelvedata.com se lo
+
+telegram:
+  bot_token: "YOUR_BOT_TOKEN"           # @BotFather se
+  chat_id: "YOUR_CHAT_ID"              # @userinfobot se
+
+pairs:
+  - "XAU/USD"     # Gold — primary
+  - "EUR/USD"
+  - "GBP/USD"
+  - "USD/JPY"
+  - "AUD/USD"
+  - "USD/CAD"
+  - "GBP/JPY"
+
+cascades:
+  - htf: "1week"
+    ltf: "4h"
+  - htf: "1day"
+    ltf: "1h"
+  - htf: "4h"
+    ltf: "15min"
+  - htf: "1h"
+    ltf: "5min"
+
+strategy:
+  displacement_multiplier: 1.5
+  min_displacement_candles: 2
+  swing_pivot_bars: 2
+  signal_timeout_minutes: 15
+  ob_mitigation: "candle_close"
+  max_obs_per_pair: 5
+
+# Twelve Data free tier = 800 calls/day
+# 10 pairs x 4 cascades x 2 TFs = 80 calls per scan
+# scan_interval = 900s (15 min) = safe for free tier
+scan_interval_seconds: 900
+
+chart:
+  output_dir: "charts"
+  candles_to_show: 100
