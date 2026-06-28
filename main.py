@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import os
 import yaml
 
 from data_connector import DataConnector
@@ -28,24 +29,82 @@ log = get_logger("main")
 # ---------------------------------------------------------------------------
 
 def load_config(path: str = "config.yaml") -> dict:
-    p = Path(path)
-    if not p.exists():
-        print(f"\n❌ config.yaml nahi mila!\n")
-        sys.exit(1)
-    with p.open() as f:
-        cfg = yaml.safe_load(f)
+    """
+    Config load karo — Environment Variables ko priority dete hain.
 
+    Railway par: Variables tab mein set karo
+    Local PC par: config.yaml mein set karo
+
+    Priority: ENV VARIABLE > config.yaml
+    """
+    # Load base config (pairs, cascades, strategy settings)
+    p = Path(path)
+    if p.exists():
+        with p.open() as f:
+            cfg = yaml.safe_load(f)
+    else:
+        # config.yaml nahi hai toh default structure banao
+        cfg = {
+            "pairs": ["XAU/USD","EUR/USD","GBP/USD","USD/JPY","AUD/USD","USD/CAD","GBP/JPY"],
+            "cascades": [
+                {"htf": "1week", "ltf": "4h"},
+                {"htf": "1day",  "ltf": "1h"},
+                {"htf": "4h",    "ltf": "15min"},
+                {"htf": "1h",    "ltf": "5min"},
+            ],
+            "strategy": {
+                "displacement_multiplier": 1.5,
+                "min_displacement_candles": 2,
+                "swing_pivot_bars": 2,
+                "signal_timeout_minutes": 15,
+                "ob_mitigation": "candle_close",
+                "max_obs_per_pair": 5,
+            },
+            "scan_interval_seconds": 900,
+            "chart": {"output_dir": "charts"},
+            "telegram": {},
+            "twelve_data": {},
+        }
+
+    # --- Environment Variables se credentials lo (Railway ke liye) ---
+    # Telegram
+    env_token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    env_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    env_td_key  = os.environ.get("TWELVE_DATA_API_KEY", "")
+
+    if env_token:
+        cfg.setdefault("telegram", {})["bot_token"] = env_token
+        log.info("Telegram token: environment variable se load hua")
+
+    if env_chat_id:
+        cfg.setdefault("telegram", {})["chat_id"] = env_chat_id
+        log.info("Telegram chat_id: environment variable se load hua")
+
+    if env_td_key:
+        cfg.setdefault("twelve_data", {})["api_key"] = env_td_key
+        log.info("Twelve Data key: environment variable se load hua")
+
+    # --- Validation ---
     tg = cfg.get("telegram", {})
     td = cfg.get("twelve_data", {})
 
-    if "YOUR_" in str(tg.get("bot_token", "")):
-        print("\n❌ Telegram bot_token set karo config.yaml mein!\n")
-        sys.exit(1)
-    if "YOUR_" in str(tg.get("chat_id", "")):
-        print("\n❌ Telegram chat_id set karo config.yaml mein!\n")
-        sys.exit(1)
-    if "YOUR_" in str(td.get("api_key", "")):
-        print("\n❌ Twelve Data api_key set karo config.yaml mein!\n")
+    token   = tg.get("bot_token", "")
+    chat_id = str(tg.get("chat_id", ""))
+    td_key  = td.get("api_key", "")
+
+    errors = []
+    if not token or "YOUR_" in token:
+        errors.append("TELEGRAM_BOT_TOKEN — Railway Variables mein add karo")
+    if not chat_id or "YOUR_" in chat_id:
+        errors.append("TELEGRAM_CHAT_ID — Railway Variables mein add karo")
+    if not td_key or "YOUR_" in td_key:
+        errors.append("TWELVE_DATA_API_KEY — Railway Variables mein add karo")
+
+    if errors:
+        print("\n❌ Missing credentials:\n")
+        for e in errors:
+            print(f"   • {e}")
+        print("\nRailway Dashboard → Service → Variables tab mein add karo\n")
         sys.exit(1)
 
     return cfg
