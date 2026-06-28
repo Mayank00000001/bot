@@ -18,8 +18,7 @@ pairs:
 cascades:
   - htf: "4h"
     ltf: "15min"
-  - htf: "2h"
-    ltf: "30min"
+
   - htf: "1h"
     ltf: "5min"
 
