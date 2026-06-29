@@ -1,8 +1,10 @@
 """
 ob_detector.py — HTF Order Block detection.
 
-Bullish OB: last bearish candle before strong upward displacement
-Bearish OB: last bullish candle before strong downward displacement
+Fixes:
+  1. OB ID uses candle timestamp — no duplicate IDs across timeframes
+  2. Notified OBs tracked — no repeat Telegram alerts
+  3. Mitigation uses wick (price enters zone = mitigated)
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 import pandas as pd
 
@@ -24,7 +26,7 @@ class OrderBlock:
     ob_id: str
     symbol: str
     htf: str
-    direction: str       # "bullish" | "bearish"
+    direction: str
     ob_high: float
     ob_low: float
     wick_high: float
@@ -32,6 +34,7 @@ class OrderBlock:
     candle_time: str
     is_mitigated: bool = False
     tap_count: int = 0
+    notified: bool = False   # ← FIX: track if Telegram alert already sent
 
     def contains_price(self, price: float) -> bool:
         return self.ob_low <= price <= self.ob_high
@@ -64,15 +67,23 @@ class OrderBlockDetector:
         self._load_state()
 
     def update(self, df: pd.DataFrame) -> List[OrderBlock]:
+        """Returns only NEW OBs that haven't been notified yet."""
         if len(df) < 15:
             return []
         self._check_mitigation(df.iloc[-1])
         new_obs = self._scan(df)
+
+        # Cap active OBs
         active = self.get_active_obs()
         if len(active) + len(new_obs) > self.max_obs:
             excess = len(active) + len(new_obs) - self.max_obs
             remove_ids = {ob.ob_id for ob in active[:excess]}
             self._obs = [ob for ob in self._obs if ob.ob_id not in remove_ids]
+
+        # Mark new OBs as notified before adding
+        for ob in new_obs:
+            ob.notified = True
+
         self._obs.extend(new_obs)
         if new_obs:
             self._save_state()
@@ -111,7 +122,11 @@ class OrderBlockDetector:
         return False
 
     def _scan(self, df: pd.DataFrame) -> List[OrderBlock]:
-        existing = {ob.ob_id for ob in self._obs}
+        # FIX: Use existing ob_ids based on candle_time + symbol + htf + direction
+        existing_keys: Set[str] = set()
+        for ob in self._obs:
+            existing_keys.add(ob.ob_id)
+
         new_obs = []
         scan_end = len(df) - 1
         scan_start = max(10, scan_end - 30)
@@ -119,37 +134,42 @@ class OrderBlockDetector:
         for i in range(scan_start, scan_end - self.MIN_DISPLACEMENT_CANDLES):
             c = df.iloc[i]
 
-            if c["close"] < c["open"]:  # Bearish candle → Bullish OB candidate
+            # FIX: Use candle timestamp in OB ID — not index
+            # This makes IDs unique across timeframes and stable across restarts
+            candle_time = str(c.get("open_time", i))
+            # Remove special chars for clean ID
+            clean_time = candle_time.replace(" ", "T").replace(":", "").replace("-", "")[:15]
+
+            if c["close"] < c["open"]:
                 if self._is_displacement(df, i + 1, "bullish"):
-                    ob_id = f"{self.symbol}_{self.htf}_bull_{i}"
-                    if ob_id not in existing:
+                    ob_id = f"{self.symbol}_{self.htf}_bull_{clean_time}"
+                    if ob_id not in existing_keys:
                         ob = OrderBlock(
                             ob_id=ob_id, symbol=self.symbol, htf=self.htf,
                             direction="bullish",
-                            ob_high=c["high"],  # Poori candle wick high
-                            ob_low=c["low"],    # Poori candle wick low
+                            ob_high=c["open"], ob_low=c["close"],
                             wick_high=c["high"], wick_low=c["low"],
-                            candle_time=str(c.get("open_time", i)),
+                            candle_time=candle_time,
                         )
                         if not self._already_mitigated(df, i, ob):
                             new_obs.append(ob)
-                            log.info(f"[OB] 🟢 Bullish — {self.symbol}/{self.htf} [{ob.ob_low:.5f}–{ob.ob_high:.5f}]")
+                            log.info(f"[OB] 🟢 Bullish — {self.symbol}/{self.htf} [{ob.ob_low:.5f}–{ob.ob_high:.5f}] @ {candle_time}")
 
-            elif c["close"] > c["open"]:  # Bullish candle → Bearish OB candidate
+            elif c["close"] > c["open"]:
                 if self._is_displacement(df, i + 1, "bearish"):
-                    ob_id = f"{self.symbol}_{self.htf}_bear_{i}"
-                    if ob_id not in existing:
+                    ob_id = f"{self.symbol}_{self.htf}_bear_{clean_time}"
+                    if ob_id not in existing_keys:
                         ob = OrderBlock(
                             ob_id=ob_id, symbol=self.symbol, htf=self.htf,
                             direction="bearish",
-                            ob_high=c["high"],  # Poori candle wick high
-                            ob_low=c["low"],    # Poori candle wick low
+                            ob_high=c["close"], ob_low=c["open"],
                             wick_high=c["high"], wick_low=c["low"],
-                            candle_time=str(c.get("open_time", i)),
+                            candle_time=candle_time,
                         )
                         if not self._already_mitigated(df, i, ob):
                             new_obs.append(ob)
-                            log.info(f"[OB] 🔴 Bearish — {self.symbol}/{self.htf} [{ob.ob_low:.5f}–{ob.ob_high:.5f}]")
+                            log.info(f"[OB] 🔴 Bearish — {self.symbol}/{self.htf} [{ob.ob_low:.5f}–{ob.ob_high:.5f}] @ {candle_time}")
+
         return new_obs
 
     def _already_mitigated(self, df: pd.DataFrame, ob_idx: int, ob: OrderBlock) -> bool:
@@ -185,7 +205,13 @@ class OrderBlockDetector:
             with self._state_file.open("r") as f:
                 data = json.load(f)
             key = f"{self.symbol}_{self.htf}"
-            self._obs = [OrderBlock(**ob) for ob in data.get(key, [])]
+            raw = data.get(key, [])
+            self._obs = []
+            for ob_data in raw:
+                # Handle old state files that don't have 'notified' field
+                if "notified" not in ob_data:
+                    ob_data["notified"] = True
+                self._obs.append(OrderBlock(**ob_data))
             log.info(f"[OB] Loaded {key}: {len(self.get_active_obs())} active")
         except Exception as e:
             log.warning(f"State load fail (fresh): {e}")
