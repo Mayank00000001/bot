@@ -1,13 +1,15 @@
 # ================================================
-# Forex Signal Bot — Config
+# Forex Signal Bot — OANDA Config
 # ================================================
 
-finnhub:
-  api_key: "YOUR_FINNHUB_API_KEY"   # Railway Variable mein daalna: FINNHUB_API_KEY
+oanda:
+  api_token:  "YOUR_OANDA_API_TOKEN"    # Railway Variable: OANDA_API_TOKEN
+  account_id: "YOUR_OANDA_ACCOUNT_ID"  # Railway Variable: OANDA_ACCOUNT_ID
+  demo: true                            # true = demo account, false = live
 
 telegram:
-  bot_token: "YOUR_BOT_TOKEN"           # @BotFather se
-  chat_id: "YOUR_CHAT_ID"              # @userinfobot se
+  bot_token: "YOUR_BOT_TOKEN"           # Railway Variable: TELEGRAM_BOT_TOKEN
+  chat_id:   "YOUR_CHAT_ID"            # Railway Variable: TELEGRAM_CHAT_ID
 
 pairs:
   - "XAU/USD"     # Gold
@@ -31,10 +33,7 @@ strategy:
   ob_mitigation: "candle_close"
   max_obs_per_pair: 5
 
-# Twelve Data free tier = 800 calls/day
-# 10 pairs x 4 cascades x 2 TFs = 80 calls per scan
-# scan_interval = 900s (15 min) = safe for free tier
-scan_interval_seconds: 600
+scan_interval_seconds: 600   # 10 minutes
 
 chart:
   output_dir: "charts"
