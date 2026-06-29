@@ -70,7 +70,7 @@ def load_config(path: str = "config.yaml") -> dict:
     # Telegram
     env_token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     env_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    env_td_key  = os.environ.get("TWELVE_DATA_API_KEY", "")
+    env_fh_key  = os.environ.get("FINNHUB_API_KEY", "")
 
     if env_token:
         cfg.setdefault("telegram", {})["bot_token"] = env_token
@@ -80,25 +80,25 @@ def load_config(path: str = "config.yaml") -> dict:
         cfg.setdefault("telegram", {})["chat_id"] = env_chat_id
         log.info("Telegram chat_id: environment variable se load hua")
 
-    if env_td_key:
-        cfg.setdefault("twelve_data", {})["api_key"] = env_td_key
-        log.info("Twelve Data key: environment variable se load hua")
+    if env_fh_key:
+        cfg.setdefault("finnhub", {})["api_key"] = env_fh_key
+        log.info("Finnhub key: environment variable se load hua")
 
     # --- Validation ---
     tg = cfg.get("telegram", {})
-    td = cfg.get("twelve_data", {})
+    fh = cfg.get("finnhub", {})
 
     token   = tg.get("bot_token", "")
     chat_id = str(tg.get("chat_id", ""))
-    td_key  = td.get("api_key", "")
+    fh_key  = fh.get("api_key", "")
 
     errors = []
     if not token or "YOUR_" in token:
         errors.append("TELEGRAM_BOT_TOKEN — Railway Variables mein add karo")
     if not chat_id or "YOUR_" in chat_id:
         errors.append("TELEGRAM_CHAT_ID — Railway Variables mein add karo")
-    if not td_key or "YOUR_" in td_key:
-        errors.append("TWELVE_DATA_API_KEY — Railway Variables mein add karo")
+    if not fh_key or "YOUR_" in fh_key:
+        errors.append("FINNHUB_API_KEY — Railway Variables mein add karo")
 
     if errors:
         print("\n❌ Missing credentials:\n")
@@ -231,12 +231,12 @@ def main() -> None:
         print("\n❌ Telegram connect nahi hua. Token aur chat_id check karo!\n")
         sys.exit(1)
 
-    # Twelve Data
-    td_cfg = cfg["twelve_data"]
-    data = DataConnector(td_cfg["api_key"])
-    log.info("Testing Twelve Data...")
+    # Finnhub
+    fh_cfg = cfg["finnhub"]
+    data = DataConnector(fh_cfg["api_key"])
+    log.info("Testing Finnhub...")
     if not data.test_connection():
-        print("\n❌ Twelve Data connect nahi hua. API key check karo!\n")
+        print("\n❌ Finnhub connect nahi hua. API key check karo!\n")
         sys.exit(1)
 
     # Scanner
