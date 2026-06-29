@@ -67,38 +67,42 @@ def load_config(path: str = "config.yaml") -> dict:
         }
 
     # --- Environment Variables se credentials lo (Railway ke liye) ---
-    # Telegram
-    env_token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    env_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-    env_fh_key  = os.environ.get("FINNHUB_API_KEY", "")
+    env_token      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    env_chat_id    = os.environ.get("TELEGRAM_CHAT_ID", "")
+    env_oanda_tok  = os.environ.get("OANDA_API_TOKEN", "")
+    env_oanda_acc  = os.environ.get("OANDA_ACCOUNT_ID", "")
 
     if env_token:
         cfg.setdefault("telegram", {})["bot_token"] = env_token
         log.info("Telegram token: environment variable se load hua")
-
     if env_chat_id:
         cfg.setdefault("telegram", {})["chat_id"] = env_chat_id
         log.info("Telegram chat_id: environment variable se load hua")
-
-    if env_fh_key:
-        cfg.setdefault("finnhub", {})["api_key"] = env_fh_key
-        log.info("Finnhub key: environment variable se load hua")
+    if env_oanda_tok:
+        cfg.setdefault("oanda", {})["api_token"] = env_oanda_tok
+        log.info("OANDA token: environment variable se load hua")
+    if env_oanda_acc:
+        cfg.setdefault("oanda", {})["account_id"] = env_oanda_acc
+        log.info("OANDA account_id: environment variable se load hua")
 
     # --- Validation ---
     tg = cfg.get("telegram", {})
-    fh = cfg.get("finnhub", {})
+    oa = cfg.get("oanda", {})
 
-    token   = tg.get("bot_token", "")
-    chat_id = str(tg.get("chat_id", ""))
-    fh_key  = fh.get("api_key", "")
+    token      = tg.get("bot_token", "")
+    chat_id    = str(tg.get("chat_id", ""))
+    oanda_tok  = oa.get("api_token", "")
+    oanda_acc  = oa.get("account_id", "")
 
     errors = []
     if not token or "YOUR_" in token:
         errors.append("TELEGRAM_BOT_TOKEN — Railway Variables mein add karo")
     if not chat_id or "YOUR_" in chat_id:
         errors.append("TELEGRAM_CHAT_ID — Railway Variables mein add karo")
-    if not fh_key or "YOUR_" in fh_key:
-        errors.append("FINNHUB_API_KEY — Railway Variables mein add karo")
+    if not oanda_tok or "YOUR_" in oanda_tok:
+        errors.append("OANDA_API_TOKEN — Railway Variables mein add karo")
+    if not oanda_acc or "YOUR_" in oanda_acc:
+        errors.append("OANDA_ACCOUNT_ID — Railway Variables mein add karo")
 
     if errors:
         print("\n❌ Missing credentials:\n")
@@ -231,12 +235,16 @@ def main() -> None:
         print("\n❌ Telegram connect nahi hua. Token aur chat_id check karo!\n")
         sys.exit(1)
 
-    # Finnhub
-    fh_cfg = cfg["finnhub"]
-    data = DataConnector(fh_cfg["api_key"])
-    log.info("Testing Finnhub...")
+    # OANDA
+    oa_cfg = cfg["oanda"]
+    data = DataConnector(
+        api_token=oa_cfg["api_token"],
+        account_id=oa_cfg["account_id"],
+        demo=oa_cfg.get("demo", True),
+    )
+    log.info("Testing OANDA...")
     if not data.test_connection():
-        print("\n❌ Finnhub connect nahi hua. API key check karo!\n")
+        print("\n❌ OANDA connect nahi hua. API token aur Account ID check karo!\n")
         sys.exit(1)
 
     # Scanner
