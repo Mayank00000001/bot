@@ -126,7 +126,8 @@ class OrderBlockDetector:
                         ob = OrderBlock(
                             ob_id=ob_id, symbol=self.symbol, htf=self.htf,
                             direction="bullish",
-                            ob_high=c["open"], ob_low=c["close"],
+                            ob_high=c["high"],  # Poori candle wick high
+                            ob_low=c["low"],    # Poori candle wick low
                             wick_high=c["high"], wick_low=c["low"],
                             candle_time=str(c.get("open_time", i)),
                         )
@@ -141,7 +142,8 @@ class OrderBlockDetector:
                         ob = OrderBlock(
                             ob_id=ob_id, symbol=self.symbol, htf=self.htf,
                             direction="bearish",
-                            ob_high=c["close"], ob_low=c["open"],
+                            ob_high=c["high"],  # Poori candle wick high
+                            ob_low=c["low"],    # Poori candle wick low
                             wick_high=c["high"], wick_low=c["low"],
                             candle_time=str(c.get("open_time", i)),
                         )
