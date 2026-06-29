@@ -2,8 +2,8 @@
 # Forex Signal Bot — Config
 # ================================================
 
-twelve_data:
-  api_key: "YOUR_TWELVE_DATA_API_KEY"   # twelvedata.com se lo
+finnhub:
+  api_key: "YOUR_FINNHUB_API_KEY"   # Railway Variable mein daalna: FINNHUB_API_KEY
 
 telegram:
   bot_token: "YOUR_BOT_TOKEN"           # @BotFather se
