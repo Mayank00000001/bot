@@ -1,14 +1,17 @@
 """
-data_connector.py — Finnhub API se Forex/Gold/Crypto candles fetch karta hai.
+data_connector.py — OANDA API se real-time Forex/Gold candles fetch karta hai.
 
-Free tier: 60 calls/minute — practically unlimited.
-Real-time data, zero delay.
+OANDA advantages:
+- Institutional grade data
+- Zero delay — real-time
+- Unlimited API calls (free demo account)
+- Best Forex/Gold data quality
 """
 
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
@@ -18,35 +21,40 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
-BASE_URL = "https://finnhub.io/api/v1"
+# OANDA API endpoints
+PRACTICE_URL = "https://api-fxtrade.oanda.com/v3"   # Live account
+DEMO_URL     = "https://api-fxpractice.oanda.com/v3" # Demo account
 
-# Finnhub symbol mapping
+# OANDA instrument mapping
 SYMBOL_MAP = {
-    "XAU/USD": "OANDA:XAU_USD",
-    "EUR/USD": "OANDA:EUR_USD",
-    "GBP/USD": "OANDA:GBP_USD",
-    "USD/JPY": "OANDA:USD_JPY",
-    "AUD/USD": "OANDA:AUD_USD",
-    "USD/CAD": "OANDA:USD_CAD",
-    "GBP/JPY": "OANDA:GBP_JPY",
-    "BTC/USD": "BINANCE:BTCUSDT",
-    "SPX":     "OANDA:SPX500_USD",
-    "NDX":     "OANDA:NAS100_USD",
+    "XAU/USD": "XAU_USD",
+    "EUR/USD": "EUR_USD",
+    "GBP/USD": "GBP_USD",
+    "USD/JPY": "USD_JPY",
+    "AUD/USD": "AUD_USD",
+    "USD/CAD": "USD_CAD",
+    "GBP/JPY": "GBP_JPY",
+    "EUR/JPY": "EUR_JPY",
+    "BTC/USD": "BTC_USD",
+    "SPX":     "SPX500_USD",
+    "NDX":     "NAS100_USD",
+    "US30":    "US30_USD",
 }
 
-# Finnhub resolution mapping
+# OANDA granularity mapping
 RESOLUTION_MAP = {
-    "5min":  "5",
-    "15min": "15",
-    "30min": "30",
-    "1h":    "60",
-    "2h":    "120",
-    "4h":    "240",
+    "1min":  "M1",
+    "5min":  "M5",
+    "15min": "M15",
+    "30min": "M30",
+    "1h":    "H1",
+    "2h":    "H2",
+    "4h":    "H4",
     "1day":  "D",
     "1week": "W",
+    "1month":"M",
 }
 
-# Candle count per timeframe
 CANDLE_COUNT = {
     "1week": 100,
     "1day":  200,
@@ -58,63 +66,72 @@ CANDLE_COUNT = {
     "5min":  300,
 }
 
-# Seconds per timeframe (for timestamp calculation)
-TF_SECONDS = {
-    "5min":  300,
-    "15min": 900,
-    "30min": 1800,
-    "1h":    3600,
-    "2h":    7200,
-    "4h":    14400,
-    "1day":  86400,
-    "1week": 604800,
-}
-
 
 class DataConnector:
     """
-    Finnhub REST API wrapper.
+    OANDA v20 REST API wrapper.
 
     Usage:
-        conn = DataConnector(api_key="your_key")
+        conn = DataConnector(
+            api_token="v2xxx...",
+            account_id="12345678",
+            demo=True
+        )
         df = conn.get_candles("XAU/USD", "4h")
     """
 
-    REQUEST_DELAY = 1.0  # 1 second between requests (safe for 60/min limit)
+    REQUEST_DELAY = 0.2  # 200ms between requests — OANDA allows 100 req/sec
 
-    def __init__(self, api_key: str) -> None:
-        self._api_key = api_key
-        self._last_request_time = 0.0
+    def __init__(
+        self,
+        api_token: str,
+        account_id: str,
+        demo: bool = True,
+    ) -> None:
+        self._token      = api_token
+        self._account_id = account_id
+        self._base_url   = DEMO_URL if demo else PRACTICE_URL
+        self._last_req   = 0.0
+
         self._session = requests.Session()
         self._session.headers.update({
-            "X-Finnhub-Token": api_key,
-            "User-Agent": "ForexSignalBot/1.0",
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type":  "application/json",
+            "Accept-Datetime-Format": "UNIX",
         })
 
     def test_connection(self) -> bool:
-        """API key valid hai? Check karo."""
+        """API token valid hai? Account check karo."""
         try:
             res = self._session.get(
-                f"{BASE_URL}/forex/exchange",
+                f"{self._base_url}/accounts/{self._account_id}/summary",
                 timeout=10,
             ).json()
-            if isinstance(res, list) and len(res) > 0:
-                log.info("Finnhub connected ✅")
+
+            if "account" in res:
+                acc = res["account"]
+                log.info(
+                    f"OANDA connected ✅ | "
+                    f"Account: {acc.get('id')} | "
+                    f"Balance: {acc.get('balance')} {acc.get('currency')}"
+                )
                 return True
-            log.error(f"Finnhub test fail: {res}")
+
+            log.error(f"OANDA test fail: {res}")
             return False
+
         except Exception as e:
-            log.error(f"Finnhub connection error: {e}")
+            log.error(f"OANDA connection error: {e}")
             return False
 
     def get_candles(
         self, symbol: str, timeframe: str, count: int = 0
     ) -> Optional[pd.DataFrame]:
         """
-        Symbol ka OHLCV data fetch karo.
+        OANDA se OHLCV candles fetch karo.
 
         Args:
-            symbol: e.g. "XAU/USD", "BTC/USD", "SPX"
+            symbol: e.g. "XAU/USD", "EUR/USD", "BTC/USD"
             timeframe: e.g. "4h", "15min", "1day"
             count: Kitne candles chahiye (0 = default)
 
@@ -122,66 +139,54 @@ class DataConnector:
             DataFrame: open_time, open, high, low, close, volume
             None on error.
         """
-        finnhub_symbol = SYMBOL_MAP.get(symbol)
-        if not finnhub_symbol:
+        instrument = SYMBOL_MAP.get(symbol)
+        if not instrument:
             log.warning(f"Symbol not mapped: {symbol}")
             return None
 
-        resolution = RESOLUTION_MAP.get(timeframe)
-        if not resolution:
+        granularity = RESOLUTION_MAP.get(timeframe)
+        if not granularity:
             log.error(f"Invalid timeframe: {timeframe}")
             return None
 
         n = count or CANDLE_COUNT.get(timeframe, 200)
-        tf_secs = TF_SECONDS.get(timeframe, 3600)
-
-        # Timestamp range
-        t_to   = int(datetime.utcnow().timestamp())
-        t_from = t_to - (n * tf_secs)
 
         self._wait_rate_limit()
 
         try:
             res = self._session.get(
-                f"{BASE_URL}/forex/candle",
+                f"{self._base_url}/instruments/{instrument}/candles",
                 params={
-                    "symbol": finnhub_symbol,
-                    "resolution": resolution,
-                    "from": t_from,
-                    "to": t_to,
+                    "count":       n,
+                    "granularity": granularity,
+                    "price":       "M",  # Mid price (ask+bid / 2)
                 },
                 timeout=15,
             ).json()
 
-            # Crypto uses different endpoint
-            if res.get("s") == "no_data" or not res.get("t"):
-                # Try stock candle endpoint for indices/crypto
-                self._wait_rate_limit()
-                res = self._session.get(
-                    f"{BASE_URL}/stock/candle",
-                    params={
-                        "symbol": finnhub_symbol,
-                        "resolution": resolution,
-                        "from": t_from,
-                        "to": t_to,
-                    },
-                    timeout=15,
-                ).json()
-
-            if res.get("s") == "no_data" or not res.get("t"):
-                log.warning(f"No data: {symbol}/{timeframe}")
+            if "candles" not in res:
+                log.warning(f"No candles: {symbol}/{timeframe} — {res}")
                 return None
 
-            df = pd.DataFrame({
-                "open_time": pd.to_datetime(res["t"], unit="s"),
-                "open":      res["o"],
-                "high":      res["h"],
-                "low":       res["l"],
-                "close":     res["c"],
-                "volume":    res.get("v", [0] * len(res["t"])),
-            })
+            candles = [c for c in res["candles"] if c.get("complete", True)]
 
-            df = df.reset_index(drop=True)
+            if not candles:
+                log.warning(f"No complete candles: {symbol}/{timeframe}")
+                return None
+
+            rows = []
+            for c in candles:
+                mid = c.get("mid", {})
+                rows.append({
+                    "open_time": pd.to_datetime(float(c["time"]), unit="s"),
+                    "open":      float(mid.get("o", 0)),
+                    "high":      float(mid.get("h", 0)),
+                    "low":       float(mid.get("l", 0)),
+                    "close":     float(mid.get("c", 0)),
+                    "volume":    int(c.get("volume", 0)),
+                })
+
+            df = pd.DataFrame(rows).reset_index(drop=True)
             log.debug(f"Fetched {len(df)} candles: {symbol}/{timeframe}")
             return df
 
@@ -193,28 +198,33 @@ class DataConnector:
             return None
 
     def get_current_price(self, symbol: str) -> Optional[float]:
-        """Symbol ka latest price fetch karo."""
-        finnhub_symbol = SYMBOL_MAP.get(symbol)
-        if not finnhub_symbol:
+        """Symbol ka latest mid price fetch karo."""
+        instrument = SYMBOL_MAP.get(symbol)
+        if not instrument:
             return None
 
         self._wait_rate_limit()
         try:
             res = self._session.get(
-                f"{BASE_URL}/quote",
-                params={"symbol": finnhub_symbol},
+                f"{self._base_url}/instruments/{instrument}/candles",
+                params={
+                    "count":       1,
+                    "granularity": "S5",  # 5-second candle — latest price
+                    "price":       "M",
+                },
                 timeout=10,
             ).json()
-            price = res.get("c")  # current price
-            if price and float(price) > 0:
-                return float(price)
+
+            candles = res.get("candles", [])
+            if candles:
+                return float(candles[-1]["mid"]["c"])
+
         except Exception as e:
             log.error(f"Price fetch error {symbol}: {e}")
         return None
 
     def _wait_rate_limit(self) -> None:
-        """Rate limit respect karo."""
-        elapsed = time.time() - self._last_request_time
+        elapsed = time.time() - self._last_req
         if elapsed < self.REQUEST_DELAY:
             time.sleep(self.REQUEST_DELAY - elapsed)
-        self._last_request_time = time.time()
+        self._last_req = time.time()
