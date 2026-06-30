@@ -1,17 +1,15 @@
 """
-data_connector.py — OANDA API se real-time Forex/Gold candles fetch karta hai.
+data_connector.py — OANDA REST API se Forex/Gold/Index candles fetch karta hai.
 
-OANDA advantages:
-- Institutional grade data
-- Zero delay — real-time
-- Unlimited API calls (free demo account)
-- Best Forex/Gold data quality
+OANDA Practice (Demo) account API:
+  - Free, unlimited practical use (rate limit generous)
+  - Real-time data, zero delay
+  - Forex, Gold (XAU/USD), Indices (SPX500, NAS100) sab available
 """
 
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
@@ -21,11 +19,10 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
-# OANDA API endpoints
-PRACTICE_URL = "https://api-fxtrade.oanda.com/v3"   # Live account
-DEMO_URL     = "https://api-fxpractice.oanda.com/v3" # Demo account
+# Practice account ka base URL (Live account ke liye alag hota hai)
+BASE_URL = "https://api-fxpractice.oanda.com/v3"
 
-# OANDA instrument mapping
+# OANDA instrument naming convention
 SYMBOL_MAP = {
     "XAU/USD": "XAU_USD",
     "EUR/USD": "EUR_USD",
@@ -34,16 +31,13 @@ SYMBOL_MAP = {
     "AUD/USD": "AUD_USD",
     "USD/CAD": "USD_CAD",
     "GBP/JPY": "GBP_JPY",
-    "EUR/JPY": "EUR_JPY",
     "BTC/USD": "BTC_USD",
     "SPX":     "SPX500_USD",
     "NDX":     "NAS100_USD",
-    "US30":    "US30_USD",
 }
 
-# OANDA granularity mapping
-RESOLUTION_MAP = {
-    "1min":  "M1",
+# OANDA candle granularity mapping
+GRANULARITY_MAP = {
     "5min":  "M5",
     "15min": "M15",
     "30min": "M30",
@@ -52,9 +46,9 @@ RESOLUTION_MAP = {
     "4h":    "H4",
     "1day":  "D",
     "1week": "W",
-    "1month":"M",
 }
 
+# OANDA max count per request = 5000, lekin hum kam rakhte hain
 CANDLE_COUNT = {
     "1week": 100,
     "1day":  200,
@@ -69,57 +63,35 @@ CANDLE_COUNT = {
 
 class DataConnector:
     """
-    OANDA v20 REST API wrapper.
+    OANDA REST API wrapper (Practice/Demo account).
 
     Usage:
-        conn = DataConnector(
-            api_token="v2xxx...",
-            account_id="12345678",
-            demo=True
-        )
+        conn = DataConnector(api_token="your_token")
         df = conn.get_candles("XAU/USD", "4h")
     """
 
-    REQUEST_DELAY = 0.2  # 200ms between requests — OANDA allows 100 req/sec
+    REQUEST_DELAY = 0.5  # OANDA rate limit generous hai — 0.5s safe gap
 
-    def __init__(
-        self,
-        api_token: str,
-        account_id: str,
-        demo: bool = True,
-    ) -> None:
-        self._token      = api_token
-        self._account_id = account_id
-        self._base_url   = DEMO_URL if demo else PRACTICE_URL
-        self._last_req   = 0.0
-
+    def __init__(self, api_token: str) -> None:
+        self._token = api_token
+        self._last_request_time = 0.0
         self._session = requests.Session()
         self._session.headers.update({
             "Authorization": f"Bearer {api_token}",
-            "Content-Type":  "application/json",
-            "Accept-Datetime-Format": "UNIX",
+            "Content-Type": "application/json",
         })
 
     def test_connection(self) -> bool:
-        """API token valid hai? Account check karo."""
+        """API token valid hai? Check karo."""
         try:
-            res = self._session.get(
-                f"{self._base_url}/accounts/{self._account_id}/summary",
-                timeout=10,
-            ).json()
-
-            if "account" in res:
-                acc = res["account"]
-                log.info(
-                    f"OANDA connected ✅ | "
-                    f"Account: {acc.get('id')} | "
-                    f"Balance: {acc.get('balance')} {acc.get('currency')}"
-                )
+            res = self._session.get(f"{BASE_URL}/accounts", timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                accounts = data.get("accounts", [])
+                log.info(f"OANDA connected ✅ — {len(accounts)} account(s) found")
                 return True
-
-            log.error(f"OANDA test fail: {res}")
+            log.error(f"OANDA test fail: {res.status_code} — {res.text[:200]}")
             return False
-
         except Exception as e:
             log.error(f"OANDA connection error: {e}")
             return False
@@ -128,10 +100,10 @@ class DataConnector:
         self, symbol: str, timeframe: str, count: int = 0
     ) -> Optional[pd.DataFrame]:
         """
-        OANDA se OHLCV candles fetch karo.
+        Symbol ka OHLCV data fetch karo.
 
         Args:
-            symbol: e.g. "XAU/USD", "EUR/USD", "BTC/USD"
+            symbol: e.g. "XAU/USD", "SPX", "NDX"
             timeframe: e.g. "4h", "15min", "1day"
             count: Kitne candles chahiye (0 = default)
 
@@ -144,54 +116,58 @@ class DataConnector:
             log.warning(f"Symbol not mapped: {symbol}")
             return None
 
-        granularity = RESOLUTION_MAP.get(timeframe)
+        granularity = GRANULARITY_MAP.get(timeframe)
         if not granularity:
             log.error(f"Invalid timeframe: {timeframe}")
             return None
 
         n = count or CANDLE_COUNT.get(timeframe, 200)
-
         self._wait_rate_limit()
 
         try:
             res = self._session.get(
-                f"{self._base_url}/instruments/{instrument}/candles",
+                f"{BASE_URL}/instruments/{instrument}/candles",
                 params={
                     "count":       n,
                     "granularity": granularity,
-                    "price":       "M",  # Mid price (ask+bid / 2)
+                    "price":       "M",   # Mid prices (bid+ask average)
                 },
                 timeout=15,
-            ).json()
+            )
 
-            if "candles" not in res:
-                log.warning(f"No candles: {symbol}/{timeframe} — {res}")
+            if res.status_code != 200:
+                log.warning(f"OANDA error {symbol}/{timeframe}: {res.status_code} — {res.text[:200]}")
                 return None
 
-            candles = [c for c in res["candles"] if c.get("complete", True)]
-
+            data = res.json()
+            candles = data.get("candles", [])
             if not candles:
-                log.warning(f"No complete candles: {symbol}/{timeframe}")
+                log.warning(f"No data returned for {symbol}/{timeframe}")
                 return None
 
             rows = []
             for c in candles:
-                mid = c.get("mid", {})
+                if not c.get("complete", True):
+                    continue  # Skip incomplete/live candle
+                mid = c["mid"]
                 rows.append({
-                    "open_time": pd.to_datetime(float(c["time"]), unit="s"),
-                    "open":      float(mid.get("o", 0)),
-                    "high":      float(mid.get("h", 0)),
-                    "low":       float(mid.get("l", 0)),
-                    "close":     float(mid.get("c", 0)),
-                    "volume":    int(c.get("volume", 0)),
+                    "open_time": pd.to_datetime(c["time"]),
+                    "open":  float(mid["o"]),
+                    "high":  float(mid["h"]),
+                    "low":   float(mid["l"]),
+                    "close": float(mid["c"]),
+                    "volume": float(c.get("volume", 0)),
                 })
+
+            if not rows:
+                return None
 
             df = pd.DataFrame(rows).reset_index(drop=True)
             log.debug(f"Fetched {len(df)} candles: {symbol}/{timeframe}")
             return df
 
         except requests.exceptions.Timeout:
-            log.error(f"Timeout: {symbol}/{timeframe}")
+            log.error(f"Timeout fetching {symbol}/{timeframe}")
             return None
         except Exception as e:
             log.error(f"Error fetching {symbol}/{timeframe}: {e}")
@@ -206,25 +182,22 @@ class DataConnector:
         self._wait_rate_limit()
         try:
             res = self._session.get(
-                f"{self._base_url}/instruments/{instrument}/candles",
-                params={
-                    "count":       1,
-                    "granularity": "S5",  # 5-second candle — latest price
-                    "price":       "M",
-                },
+                f"{BASE_URL}/instruments/{instrument}/candles",
+                params={"count": 1, "granularity": "M1", "price": "M"},
                 timeout=10,
-            ).json()
-
-            candles = res.get("candles", [])
+            )
+            if res.status_code != 200:
+                return None
+            data = res.json()
+            candles = data.get("candles", [])
             if candles:
                 return float(candles[-1]["mid"]["c"])
-
         except Exception as e:
             log.error(f"Price fetch error {symbol}: {e}")
         return None
 
     def _wait_rate_limit(self) -> None:
-        elapsed = time.time() - self._last_req
+        elapsed = time.time() - self._last_request_time
         if elapsed < self.REQUEST_DELAY:
             time.sleep(self.REQUEST_DELAY - elapsed)
-        self._last_req = time.time()
+        self._last_request_time = time.time()
