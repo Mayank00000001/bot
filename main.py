@@ -190,17 +190,24 @@ class SignalScanner:
             if engine.is_watching(ob.ob_id):
                 continue
             log.info(f"[TAP] {sym} @ {current:.5f} → {ob.direction.upper()} OB {htf}→{ltf}")
+            self._tg.send_tap_alert(sym, htf, ltf, ob.direction, current)
             engine.add_watch(ob)
 
         # LTF confirmation
-        if engine.active_count() == 0:
+        active = engine.active_count()
+        if active == 0:
             return
+
+        log.info(f"[LTF] {sym} {htf}→{ltf}: {active} active watch(es), checking MSS...")
 
         df_ltf = self._data.get_candles(sym, ltf)
         if df_ltf is None or len(df_ltf) < 20:
+            log.warning(f"[LTF] No/insufficient LTF data for {sym}/{ltf} (need 20+, watches waiting)")
             return
 
         signals = engine.process(df_ltf)
+        if not signals:
+            log.debug(f"[LTF] {sym} {htf}→{ltf}: no MSS confirmed yet this scan")
         for sig in signals:
             chart = generate_chart(
                 df_ltf, sig,
