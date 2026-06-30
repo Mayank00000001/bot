@@ -1,6 +1,6 @@
 """
 main.py — Forex Signal Bot
-Twelve Data se data → OB detect → MSS confirm → Telegram alert
+OANDA se data → OB detect → MSS confirm → Telegram alert
 Free server par 24/7 chalta hai (Railway / Render / Koyeb)
 """
 
@@ -63,46 +63,42 @@ def load_config(path: str = "config.yaml") -> dict:
             "scan_interval_seconds": 900,
             "chart": {"output_dir": "charts"},
             "telegram": {},
-            "twelve_data": {},
+            "oanda": {},
         }
 
     # --- Environment Variables se credentials lo (Railway ke liye) ---
-    env_token      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    env_chat_id    = os.environ.get("TELEGRAM_CHAT_ID", "")
-    env_oanda_tok  = os.environ.get("OANDA_API_TOKEN", "")
-    env_oanda_acc  = os.environ.get("OANDA_ACCOUNT_ID", "")
+    # Telegram
+    env_token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    env_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    env_oa_token = os.environ.get("OANDA_API_TOKEN", "")
 
     if env_token:
         cfg.setdefault("telegram", {})["bot_token"] = env_token
         log.info("Telegram token: environment variable se load hua")
+
     if env_chat_id:
         cfg.setdefault("telegram", {})["chat_id"] = env_chat_id
         log.info("Telegram chat_id: environment variable se load hua")
-    if env_oanda_tok:
-        cfg.setdefault("oanda", {})["api_token"] = env_oanda_tok
+
+    if env_oa_token:
+        cfg.setdefault("oanda", {})["api_token"] = env_oa_token
         log.info("OANDA token: environment variable se load hua")
-    if env_oanda_acc:
-        cfg.setdefault("oanda", {})["account_id"] = env_oanda_acc
-        log.info("OANDA account_id: environment variable se load hua")
 
     # --- Validation ---
     tg = cfg.get("telegram", {})
     oa = cfg.get("oanda", {})
 
-    token      = tg.get("bot_token", "")
-    chat_id    = str(tg.get("chat_id", ""))
-    oanda_tok  = oa.get("api_token", "")
-    oanda_acc  = oa.get("account_id", "")
+    token    = tg.get("bot_token", "")
+    chat_id  = str(tg.get("chat_id", ""))
+    oa_token = oa.get("api_token", "")
 
     errors = []
     if not token or "YOUR_" in token:
         errors.append("TELEGRAM_BOT_TOKEN — Railway Variables mein add karo")
     if not chat_id or "YOUR_" in chat_id:
         errors.append("TELEGRAM_CHAT_ID — Railway Variables mein add karo")
-    if not oanda_tok or "YOUR_" in oanda_tok:
+    if not oa_token or "YOUR_" in oa_token:
         errors.append("OANDA_API_TOKEN — Railway Variables mein add karo")
-    if not oanda_acc or "YOUR_" in oanda_acc:
-        errors.append("OANDA_ACCOUNT_ID — Railway Variables mein add karo")
 
     if errors:
         print("\n❌ Missing credentials:\n")
@@ -179,7 +175,7 @@ class SignalScanner:
             log.warning(f"No HTF data: {sym}/{htf}")
             return
 
-        # OB detection
+        # OB detection — sirf naye OBs ka alert, ek baar
         new_obs = detector.update(df_htf)
         for ob in new_obs:
             self._tg.send_ob_detected(sym, htf, ob.direction, ob.ob_low, ob.ob_high)
@@ -191,6 +187,8 @@ class SignalScanner:
 
         tapped = detector.check_tap(current)
         for ob in tapped:
+            if engine.is_watching(ob.ob_id):
+                continue
             log.info(f"[TAP] {sym} @ {current:.5f} → {ob.direction.upper()} OB {htf}→{ltf}")
             engine.add_watch(ob)
 
@@ -218,7 +216,7 @@ class SignalScanner:
 def main() -> None:
     print("\n" + "═"*50)
     print("   Forex Signal Bot — HTF OB + LTF MSS")
-    print("   Twelve Data | Telegram Alerts")
+    print("   OANDA | Telegram Alerts")
     print("═"*50 + "\n")
 
     # Dirs
@@ -237,14 +235,10 @@ def main() -> None:
 
     # OANDA
     oa_cfg = cfg["oanda"]
-    data = DataConnector(
-        api_token=oa_cfg["api_token"],
-        account_id=oa_cfg["account_id"],
-        demo=oa_cfg.get("demo", True),
-    )
+    data = DataConnector(oa_cfg["api_token"])
     log.info("Testing OANDA...")
     if not data.test_connection():
-        print("\n❌ OANDA connect nahi hua. API token aur Account ID check karo!\n")
+        print("\n❌ OANDA connect nahi hua. API token check karo!\n")
         sys.exit(1)
 
     # Scanner
