@@ -1,21 +1,19 @@
 # ================================================
-# Forex Signal Bot — OANDA Config
+# Forex Signal Bot — Config
+# Data source: OANDA Practice API (free, real-time, unlimited)
 # ================================================
 
 oanda:
-  api_token:  "YOUR_OANDA_API_TOKEN"    # Railway Variable: OANDA_API_TOKEN
-  account_id: "YOUR_OANDA_ACCOUNT_ID"  # Railway Variable: OANDA_ACCOUNT_ID
-  demo: true                            # true = demo account, false = live
+  api_token: "YOUR_OANDA_API_TOKEN"   # Railway Variable mein: OANDA_API_TOKEN
 
 telegram:
-  bot_token: "YOUR_BOT_TOKEN"           # Railway Variable: TELEGRAM_BOT_TOKEN
-  chat_id:   "YOUR_CHAT_ID"            # Railway Variable: TELEGRAM_CHAT_ID
+  bot_token: "YOUR_BOT_TOKEN"           # @BotFather se
+  chat_id: "YOUR_CHAT_ID"              # @userinfobot se
 
 pairs:
   - "XAU/USD"     # Gold
   - "SPX"         # S&P 500
   - "NDX"         # Nasdaq 100
-  - "BTC/USD"     # Bitcoin
 
 cascades:
   - htf: "4h"
@@ -33,7 +31,9 @@ strategy:
   ob_mitigation: "candle_close"
   max_obs_per_pair: 5
 
-scan_interval_seconds: 600   # 10 minutes
+# OANDA Practice API — generous rate limit, real-time data
+# Har 5 minute scan safely chal sakta hai
+scan_interval_seconds: 300
 
 chart:
   output_dir: "charts"
