@@ -48,6 +48,16 @@ class TelegramNotifier:
             f"👀 Watching for LTF tap..."
         )
 
+    def send_tap_alert(self, symbol: str, htf: str, ltf: str, direction: str, price: float) -> None:
+        """Price ne OB zone tap kiya — LTF MSS watch shuru."""
+        emoji = "🟢" if direction == "bullish" else "🔴"
+        self._text(
+            f"{emoji} *OB TAPPED* 📍\n"
+            f"📊 `{symbol}` | {htf}→{ltf}\n"
+            f"💰 Price: `{price:.5f}`\n"
+            f"🔍 Ab LTF par displacement + FVG + MSS dhoond rahe hain..."
+        )
+
     def send_signal(self, sig: Signal, chart_path: Optional[str] = None) -> None:
         arrow  = "▲" if sig.direction == "long" else "▼"
         dlabel = "LONG  🟢" if sig.direction == "long" else "SHORT 🔴"
