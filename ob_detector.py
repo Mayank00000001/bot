@@ -1,22 +1,34 @@
 """
 ob_detector.py — HTF Order Block detection.
 
-Fixes:
-  1. OB ID uses candle timestamp — no duplicate IDs across timeframes
-  2. Notified OBs tracked — no repeat Telegram alerts
-  3. Mitigation uses wick (price enters zone = mitigated)
+Order-block lifecycle:
+    detected -> (price enters body zone) TAPPED  [alert + arm LTF watch]
+             -> (LTF MSS confirmed in time) signal, then retired
+             -> (HTF candle CLOSES beyond the protective wick) INVALIDATED, retired
+
+Key fix (see SPEC.md):
+    "Tap" (price returns into the zone) and "invalidation" (the OB fails) are now
+    separate events. Previously an OB was marked mitigated as soon as a candle
+    closed *inside* the zone — but that is the tap we want to act on, so the OB
+    was killed before it could ever tap. Now a close inside the zone arms the
+    watch; only a close *beyond the protective wick* invalidates the OB.
+
+Invariants:
+    - An OB is tapped at most once (``tapped`` latches True on first tap).
+    - ``check_tap`` never returns an invalidated or already-tapped OB.
+    - Detection still surfaces only *fresh* OBs — ones price has not already
+      closed back into after they formed (``_already_touched``).
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, asdict
-from pathlib import Path
 from typing import List, Optional, Set
 
 import pandas as pd
 
 from logger import get_logger
+from state_store import StateStore
 
 log = get_logger(__name__)
 
@@ -32,17 +44,33 @@ class OrderBlock:
     wick_high: float
     wick_low: float
     candle_time: str
-    is_mitigated: bool = False
+    invalidated: bool = False   # price closed beyond the protective wick -> retired
+    tapped: bool = False        # price returned into the zone -> watch armed (once)
     tap_count: int = 0
-    notified: bool = False   # ← FIX: track if Telegram alert already sent
+    notified: bool = False      # "New OB" Telegram alert already sent
 
     def contains_price(self, price: float) -> bool:
-        return self.ob_low <= price <= self.ob_high
+        """True if price is inside the OB body zone (the tap test)."""
+        # bool() so a numpy scalar input does not leak a numpy.bool_ out.
+        return bool(self.ob_low <= price <= self.ob_high)
 
-    def is_mitigated_by(self, candle: pd.Series, mode: str = "candle_close") -> bool:
-        if mode == "candle_close":
-            return self.ob_low <= candle["close"] <= self.ob_high
-        return candle["low"] <= self.ob_high and candle["high"] >= self.ob_low
+    def closed_inside(self, candle: pd.Series) -> bool:
+        """True if the candle CLOSED inside the body zone.
+
+        Used only as the detection freshness filter (has price already returned
+        to this OB since it formed?) — not as an invalidation test.
+        """
+        return bool(self.ob_low <= candle["close"] <= self.ob_high)
+
+    def is_invalidated_by(self, candle: pd.Series) -> bool:
+        """True if the candle CLOSED beyond the protective wick — the OB failed.
+
+        Bullish OB: invalidated by a close below its wick low.
+        Bearish OB: invalidated by a close above its wick high.
+        """
+        if self.direction == "bullish":
+            return bool(candle["close"] < self.wick_low)
+        return bool(candle["close"] > self.wick_high)
 
 
 class OrderBlockDetector:
@@ -55,22 +83,20 @@ class OrderBlockDetector:
         symbol: str,
         htf: str,
         max_obs: int = 5,
-        mitigation_mode: str = "candle_close",
-        state_file: str = "state/ob_state.json",
+        store: Optional[StateStore] = None,
     ) -> None:
         self.symbol = symbol
         self.htf = htf
         self.max_obs = max_obs
-        self.mitigation_mode = mitigation_mode
-        self._state_file = Path(state_file)
+        self._store = store
         self._obs: List[OrderBlock] = []
         self._load_state()
 
     def update(self, df: pd.DataFrame) -> List[OrderBlock]:
-        """Returns only NEW OBs that haven't been notified yet."""
+        """Retire invalidated OBs, detect new ones, return only the NEW OBs."""
         if len(df) < 15:
             return []
-        self._check_mitigation(df.iloc[-1])
+        self._check_invalidation(df.iloc[-1])
         new_obs = self._scan(df)
 
         # Cap active OBs
@@ -85,20 +111,27 @@ class OrderBlockDetector:
             ob.notified = True
 
         self._obs.extend(new_obs)
-        if new_obs:
-            self._save_state()
+        # Persist invalidation flips + cap removals + new OBs from this scan.
+        self._save_state()
         return new_obs
 
     def check_tap(self, price: float) -> List[OrderBlock]:
-        tapped = [ob for ob in self._obs if not ob.is_mitigated and ob.contains_price(price)]
+        """Return OBs newly tapped by ``price`` (in-zone, not invalidated, not
+        yet tapped). Latches ``tapped`` so each OB taps at most once."""
+        tapped = [
+            ob for ob in self._obs
+            if not ob.invalidated and not ob.tapped and ob.contains_price(price)
+        ]
         for ob in tapped:
+            ob.tapped = True
             ob.tap_count += 1
         if tapped:
             self._save_state()
         return tapped
 
     def get_active_obs(self) -> List[OrderBlock]:
-        return [ob for ob in self._obs if not ob.is_mitigated]
+        """OBs that have not been invalidated (still in play)."""
+        return [ob for ob in self._obs if not ob.invalidated]
 
     def _is_displacement(self, df: pd.DataFrame, start_idx: int, direction: str) -> bool:
         """
@@ -122,7 +155,7 @@ class OrderBlockDetector:
                 if count >= self.MIN_DISPLACEMENT_CANDLES:
                     return True
             else:
-                count = 0  # FIX: reset on non-qualifying candle — must be truly consecutive
+                count = 0  # reset on non-qualifying candle — must be truly consecutive
         return False
 
     def _displacement_strength(self, df: pd.DataFrame, start_idx: int, direction: str) -> float:
@@ -142,11 +175,11 @@ class OrderBlockDetector:
 
     def _scan(self, df: pd.DataFrame) -> List[OrderBlock]:
         """
-        Scan for OBs. FIX: instead of registering every candle that
-        technically passes displacement, we collect all candidates and
-        keep only the STRONGEST one per direction in the recent window —
-        this matches how real OBs are identified (the origin of the
-        most significant displacement, not every minor wiggle).
+        Scan for OBs. Instead of registering every candle that technically
+        passes displacement, collect all candidates and keep only the STRONGEST
+        one per direction in the recent window — this matches how real OBs are
+        identified (the origin of the most significant displacement, not every
+        minor wiggle).
         """
         existing_keys: Set[str] = set()
         for ob in self._obs:
@@ -174,7 +207,7 @@ class OrderBlockDetector:
                             wick_high=c["high"], wick_low=c["low"],
                             candle_time=candle_time,
                         )
-                        if not self._already_mitigated(df, i, ob):
+                        if not self._already_touched(df, i, ob):
                             strength = self._displacement_strength(df, i + 1, "bullish")
                             bullish_candidates.append((strength, i, ob))
 
@@ -189,7 +222,7 @@ class OrderBlockDetector:
                             wick_high=c["high"], wick_low=c["low"],
                             candle_time=candle_time,
                         )
-                        if not self._already_mitigated(df, i, ob):
+                        if not self._already_touched(df, i, ob):
                             strength = self._displacement_strength(df, i + 1, "bearish")
                             bearish_candidates.append((strength, i, ob))
 
@@ -210,47 +243,43 @@ class OrderBlockDetector:
 
         return new_obs
 
-    def _already_mitigated(self, df: pd.DataFrame, ob_idx: int, ob: OrderBlock) -> bool:
+    def _already_touched(self, df: pd.DataFrame, ob_idx: int, ob: OrderBlock) -> bool:
+        """True if price already CLOSED back into the zone after the OB formed.
+
+        Detection freshness filter — such an OB is not a fresh setup, so it is
+        not surfaced. (Preserves the original ``candle_close`` behaviour.)
+        """
         for i in range(ob_idx + self.MIN_DISPLACEMENT_CANDLES + 1, len(df)):
-            if ob.is_mitigated_by(df.iloc[i], self.mitigation_mode):
+            if ob.closed_inside(df.iloc[i]):
                 return True
         return False
 
-    def _check_mitigation(self, candle: pd.Series) -> None:
+    def _check_invalidation(self, candle: pd.Series) -> None:
+        """Retire OBs whose protective wick was closed through by ``candle``."""
         for ob in self._obs:
-            if not ob.is_mitigated and ob.is_mitigated_by(candle, self.mitigation_mode):
-                ob.is_mitigated = True
-                log.info(f"[OB] ❌ Mitigated: {ob.ob_id}")
+            if not ob.invalidated and ob.is_invalidated_by(candle):
+                ob.invalidated = True
+                log.info(f"[OB] ❌ Invalidated (closed beyond wick): {ob.ob_id}")
+
+    # ------------------------------------------------------------------ #
+    # Persistence (SQLite via StateStore; in-memory only when store is None)
+    # ------------------------------------------------------------------ #
 
     def _save_state(self) -> None:
+        if self._store is None:
+            return
         try:
-            self._state_file.parent.mkdir(parents=True, exist_ok=True)
-            key = f"{self.symbol}_{self.htf}"
-            existing = {}
-            if self._state_file.exists():
-                with self._state_file.open("r") as f:
-                    existing = json.load(f)
-            existing[key] = [asdict(ob) for ob in self._obs]
-            with self._state_file.open("w") as f:
-                json.dump(existing, f, indent=2)
+            self._store.save_obs(self.symbol, self.htf, [asdict(ob) for ob in self._obs])
         except Exception as e:
             log.error(f"State save fail: {e}")
 
     def _load_state(self) -> None:
+        if self._store is None:
+            return
         try:
-            if not self._state_file.exists():
-                return
-            with self._state_file.open("r") as f:
-                data = json.load(f)
-            key = f"{self.symbol}_{self.htf}"
-            raw = data.get(key, [])
-            self._obs = []
-            for ob_data in raw:
-                # Handle old state files that don't have 'notified' field
-                if "notified" not in ob_data:
-                    ob_data["notified"] = True
-                self._obs.append(OrderBlock(**ob_data))
-            log.info(f"[OB] Loaded {key}: {len(self.get_active_obs())} active")
+            rows = self._store.load_obs(self.symbol, self.htf)
+            self._obs = [OrderBlock(**row) for row in rows]
+            log.info(f"[OB] Loaded {self.symbol}_{self.htf}: {len(self.get_active_obs())} active")
         except Exception as e:
             log.warning(f"State load fail (fresh): {e}")
             self._obs = []

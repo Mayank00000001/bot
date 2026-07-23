@@ -28,6 +28,10 @@ strategy:
   min_displacement_candles: 2
   swing_pivot_bars: 2
   signal_timeout_minutes: 15
+  # NOTE: `ob_mitigation` is no longer used. Order blocks are now retired only
+  # when price CLOSES beyond the protective wick (see ob_detector.py). A close
+  # inside the zone is treated as a tap, not an invalidation. Kept for
+  # reference; changing it has no effect.
   ob_mitigation: "candle_close"
   max_obs_per_pair: 5
 

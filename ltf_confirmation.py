@@ -4,14 +4,16 @@ ltf_confirmation.py — MSS + FVG + Displacement sequential confirmation.
 
 from __future__ import annotations
 
+import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from ob_detector import OrderBlock
 from logger import get_logger
+from state_store import StateStore
 
 log = get_logger(__name__)
 
@@ -61,21 +63,30 @@ class LTFConfirmationEngine:
         symbol: str, htf: str, ltf: str,
         sl_buffer_pct: float = 0.0005,
         signal_timeout_minutes: int = 15,
+        store: Optional[StateStore] = None,
     ) -> None:
         self.symbol = symbol
         self.htf = htf
         self.ltf = ltf
         self.sl_buffer_pct = sl_buffer_pct
         self.timeout_seconds = signal_timeout_minutes * 60
+        self._store = store
         self._watches: Dict[str, PendingWatch] = {}
+        self._load_watches()
+
+    def is_watching(self, ob_id: str) -> bool:
+        """True if an armed watch exists for this OB (used by the tap loop)."""
+        return ob_id in self._watches
 
     def add_watch(self, ob: OrderBlock) -> None:
         if ob.ob_id in self._watches:
             return
-        self._watches[ob.ob_id] = PendingWatch(
+        watch = PendingWatch(
             ob=ob, tap_time=time.time(),
             timeout_seconds=self.timeout_seconds,
         )
+        self._watches[ob.ob_id] = watch
+        self._persist_watch(watch)
         log.info(f"[LTF] 👀 Watch — {self.symbol} {ob.direction.upper()} {self.htf}→{self.ltf}")
 
     def process(self, df: pd.DataFrame) -> List[Signal]:
@@ -85,6 +96,7 @@ class LTFConfirmationEngine:
         for oid in [k for k, w in self._watches.items() if w.is_expired()]:
             log.info(f"[LTF] ⏰ Expired: {oid}")
             del self._watches[oid]
+            self._drop_watch(oid)
 
         signals = []
         for ob_id, watch in list(self._watches.items()):
@@ -92,6 +104,11 @@ class LTFConfirmationEngine:
             if sig:
                 signals.append(sig)
                 del self._watches[ob_id]
+                self._drop_watch(ob_id)
+            else:
+                # Persist confirmation progress (displacement/FVG flags) so a
+                # restart resumes mid-sequence instead of from scratch.
+                self._persist_watch(watch)
         return signals
 
     def active_count(self) -> int:
@@ -186,4 +203,70 @@ class LTFConfirmationEngine:
             tp1=tp1, tp2=tp2,
             fvg_high=watch.fvg_high, fvg_low=watch.fvg_low,
             mss_level=watch.swing_level,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Persistence (SQLite via StateStore; in-memory only when store is None)
+    # ------------------------------------------------------------------ #
+
+    def _load_watches(self) -> None:
+        if self._store is None:
+            return
+        try:
+            for row in self._store.load_watches(self.symbol, self.htf, self.ltf):
+                watch = self._row_to_watch(row)
+                self._watches[watch.ob.ob_id] = watch
+            if self._watches:
+                log.info(
+                    f"[LTF] Loaded {len(self._watches)} watch(es) — "
+                    f"{self.symbol} {self.htf}→{self.ltf}"
+                )
+        except Exception as e:
+            log.warning(f"[LTF] Watch load fail (fresh): {e}")
+            self._watches = {}
+
+    def _persist_watch(self, watch: PendingWatch) -> None:
+        if self._store is None:
+            return
+        try:
+            self._store.upsert_watch(self._watch_to_row(watch))
+        except Exception as e:
+            log.error(f"[LTF] Watch save fail: {e}")
+
+    def _drop_watch(self, ob_id: str) -> None:
+        if self._store is None:
+            return
+        try:
+            self._store.delete_watch(ob_id)
+        except Exception as e:
+            log.error(f"[LTF] Watch delete fail: {e}")
+
+    def _watch_to_row(self, watch: PendingWatch) -> dict:
+        return {
+            "ob_id": watch.ob.ob_id,
+            "symbol": self.symbol, "htf": self.htf, "ltf": self.ltf,
+            "ob_json": json.dumps(asdict(watch.ob)),
+            "tap_time": watch.tap_time,
+            "timeout_seconds": watch.timeout_seconds,
+            "displacement_confirmed": watch.displacement_confirmed,
+            "fvg_confirmed": watch.fvg_confirmed,
+            "displacement_candle_idx": watch.displacement_candle_idx,
+            "fvg_high": watch.fvg_high,
+            "fvg_low": watch.fvg_low,
+            "swing_level": watch.swing_level,
+        }
+
+    @staticmethod
+    def _row_to_watch(row: dict) -> PendingWatch:
+        ob = OrderBlock(**json.loads(row["ob_json"]))
+        return PendingWatch(
+            ob=ob,
+            tap_time=row["tap_time"],
+            timeout_seconds=row["timeout_seconds"],
+            displacement_confirmed=row["displacement_confirmed"],
+            fvg_confirmed=row["fvg_confirmed"],
+            displacement_candle_idx=row["displacement_candle_idx"],
+            fvg_high=row["fvg_high"],
+            fvg_low=row["fvg_low"],
+            swing_level=row["swing_level"],
         )

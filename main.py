@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import os
 import yaml
@@ -19,6 +19,7 @@ from ob_detector import OrderBlockDetector
 from ltf_confirmation import LTFConfirmationEngine
 from chart_generator import generate_chart
 from telegram_notifier import TelegramNotifier
+from state_store import StateStore
 from logger import get_logger
 
 log = get_logger("main")
@@ -122,6 +123,8 @@ class SignalScanner:
         self._tg   = tg
         self._strat = cfg.get("strategy", {})
 
+        # Single SQLite store shared by all detectors and LTF engines.
+        self._store = StateStore()
         self._ob_det: Dict[Tuple[str, str], OrderBlockDetector] = {}
         self._ltf_eng: Dict[Tuple[str, str, str], LTFConfirmationEngine] = {}
         self._setup()
@@ -130,7 +133,6 @@ class SignalScanner:
         pairs     = self._cfg.get("pairs", [])
         cascades  = self._cfg.get("cascades", [])
         max_obs   = self._strat.get("max_obs_per_pair", 5)
-        mitmode   = self._strat.get("ob_mitigation", "candle_close")
         timeout   = self._strat.get("signal_timeout_minutes", 15)
 
         for sym in pairs:
@@ -140,11 +142,12 @@ class SignalScanner:
                 if key_ob not in self._ob_det:
                     self._ob_det[key_ob] = OrderBlockDetector(
                         symbol=sym, htf=htf,
-                        max_obs=max_obs, mitigation_mode=mitmode,
+                        max_obs=max_obs, store=self._store,
                     )
                 self._ltf_eng[(sym, htf, ltf)] = LTFConfirmationEngine(
                     symbol=sym, htf=htf, ltf=ltf,
                     signal_timeout_minutes=timeout,
+                    store=self._store,
                 )
         log.info(f"Ready: {len(self._ob_det)} OB detectors, {len(self._ltf_eng)} LTF engines")
 
