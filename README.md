@@ -1,101 +1,96 @@
 # Forex Signal Bot 🚨
-### HTF OB + LTF MSS — Free Server par 24/7
 
-**Kya karta hai:**
-- Twelve Data se live Forex + Gold data fetch karta hai
-- HTF Order Blocks dhundta hai
-- LTF MSS + FVG confirm karta hai  
-- Telegram par alert + chart bhejta hai
-- **Railway.app par FREE mein 24/7 chalta hai**
+HTF Order Block → LTF confirmation (Displacement → FVG → MSS) signal bot.
+Fetches live market data from **OANDA** and sends alerts to **Telegram**.
+Runs 24/7 on a free host (Railway / Render / Koyeb).
+
+> ⚠️ Signals only — always verify on the chart before trading.
 
 ---
 
-## Step 1 — Config fill karo
+## What it does
 
-`config.yaml` kholo aur yeh 3 cheezein fill karo:
+1. Detects HTF **Order Blocks** (bullish/bearish) on each configured pair.
+2. Watches for price to **tap** the OB zone → posts an *OB TAPPED* alert and
+   arms a lower-timeframe (LTF) watch.
+3. On the LTF, confirms **Displacement → FVG → MSS** within a timeout window.
+4. On confirmation, sends a **signal** (entry / SL / TP1 / TP2) with a chart.
 
-```yaml
-twelve_data:
-  api_key: "yahan apni key"      # twelvedata.com → Dashboard
+Alert sequence per setup: `New OB` → `OB TAPPED` → `MSS SIGNAL`.
 
-telegram:
-  bot_token: "yahan token"       # @BotFather se
-  chat_id: "yahan chat_id"       # @userinfobot se
+## Data source & credentials
+
+Data comes from the **OANDA practice API** (free, real-time). Set three
+environment variables (Railway → Service → **Variables**), or fill `config.yaml`
+locally:
+
+| Variable | Where to get it |
+|----------|-----------------|
+| `OANDA_API_TOKEN` | OANDA practice account → Manage API Access |
+| `TELEGRAM_BOT_TOKEN` | @BotFather |
+| `TELEGRAM_CHAT_ID` | @userinfobot (or your channel ID) |
+
+Environment variables take priority over `config.yaml`.
+
+## Configuration (`config.yaml`)
+
+- `pairs` — instruments to scan (e.g. `XAU/USD`, `SPX`, `NDX`).
+- `cascades` — HTF→LTF pairs (e.g. `4h→15min`, `1h→5min`).
+- `scan_interval_seconds` — how often to scan (default 300 = 5 min).
+- `strategy.signal_timeout_minutes` — how long a tapped OB waits for MSS.
+- `strategy.max_obs_per_pair` — active OBs kept per pair/timeframe.
+- `strategy.ob_mitigation` — **ignored** (kept for reference). Order blocks are
+  retired only when price *closes beyond the protective wick* (see below).
+
+## How order blocks are retired (important)
+
+- A candle closing **inside** the OB zone is a **tap** — it arms the watch, it
+  does **not** kill the OB.
+- An OB is **invalidated** (retired) only when a candle **closes beyond its
+  protective wick** (bullish: below the wick low; bearish: above the wick high).
+
+## State persistence
+
+Order blocks and pending LTF watches are stored in a single SQLite database
+(`state/bot.db`, standard-library `sqlite3` — no extra dependency). The path is
+configurable via the `STATE_DB_PATH` environment variable.
+
+**Durability:** on an ephemeral host filesystem (e.g. a Railway container
+*without* a mounted volume) this DB is wiped on every restart — it is *in-run*
+persistence. That is fine for a process that runs continuously. To make state
+survive restarts, mount a volume and point `STATE_DB_PATH` at a file on it — **no
+code change required**.
+
+## Deploy on Railway (free)
+
+1. Push this repo to GitHub.
+2. Railway → *New Project* → *Deploy from GitHub repo*.
+3. Add the three environment variables above.
+4. The bot deploys and starts (`Procfile`: `worker: python main.py`).
+5. Watch the logs for `Bot live!` and a Telegram startup message.
+
+## Run / test locally
+
+```bash
+pip install -r requirements.txt
+python -m pytest tests/ -v      # 15 tests (state + tap/invalidation logic)
+python main.py                  # needs the three env vars / config.yaml
 ```
 
----
+## Handover notes
 
-## Step 2 — GitHub par daalo
+- **This deploy runs one process continuously** (~1 month on Railway free tier,
+  then migrated to a fresh account). It is **not** restarted otherwise.
+- Each migration/redeploy resets the in-run state: order blocks re-detect
+  themselves on the next scan; only *in-flight* LTF watches are lost (rare, once
+  per migration). If that ever matters, add a Railway volume (see *Durability*).
+- `ob_mitigation` in `config.yaml` no longer has any effect.
 
-1. **github.com** par account banao (free)
-2. New repository banao → naam: `forex-signal-bot`
-3. Yeh saari files us repo mein upload karo
-
----
-
-## Step 3 — Railway par deploy karo (FREE)
-
-1. **railway.app** jaao → "Start a New Project"
-2. "Deploy from GitHub repo" select karo
-3. Apna `forex-signal-bot` repo select karo
-4. **Variables** tab mein jaao → inhe add karo:
-
-```
-TWELVE_DATA_API_KEY = tumhari_api_key
-TELEGRAM_BOT_TOKEN  = tumhara_token
-TELEGRAM_CHAT_ID    = tumhara_chat_id
-```
-
-5. Bot automatically deploy ho jayega
-6. Logs mein dekho — "Bot live!" dikhna chahiye
-7. Telegram par startup message aayega
-
-**Railway free tier: $5/month credit — ek chota bot ke liye kaafi hai**
-
----
-
-## Telegram Alert Example
-
-```
-🚨 MSS SIGNAL ▲
-━━━━━━━━━━━━━━━━━━━━
-📊 Pair:      XAU/USD
-📈 Direction: LONG  🟢
-🕯 Cascade:   H4 OB → M15 MSS
-━━━━━━━━━━━━━━━━━━━━
-💰 Entry:     1923.45000
-🛑 SL:        1918.20000
-🎯 TP1 (1:2): 1933.95000
-🎯 TP2 (1:3): 1939.20000
-━━━━━━━━━━━━━━━━━━━━
-📐 Risk:    525 pips
-💵 Reward:  1575 pips
-⚠️ Signal only — verify before trading
-[Chart Screenshot]
-```
-
----
-
-## API Call Budget (Free Tier)
-
-Twelve Data free = **800 calls/day**
-
-| Scan | Calls Used |
-|------|-----------|
-| 7 pairs × 4 cascades × 2 TFs | ~56 calls |
-| Price check × 7 pairs | ~7 calls |
-| **Total per scan** | **~63 calls** |
-| Scan interval: 15 min | **~63 × 32 = ~2016/day** |
-
-⚠️ Free tier ke liye **scan_interval_seconds: 1800** (30 min) rakho ya pairs kam karo.
-
----
-
-## Common Errors
+## Common errors
 
 | Error | Fix |
 |-------|-----|
-| `Telegram connect nahi hua` | Bot token check karo; apne bot ko ek message bhejo |
-| `Twelve Data connect nahi hua` | API key check karo twelvedata.com par |
-| `No HTF data` | Symbol name check karo — Twelve Data mein `XAU/USD` hai, `XAUUSD` nahi |
-| Railway crash loop | Logs dekho → config.yaml variables sahi hain? |
+| `Telegram connect nahi hua` | Check `TELEGRAM_BOT_TOKEN`; send your bot a message first |
+| `OANDA connect nahi hua` | Check `OANDA_API_TOKEN` (practice account) |
+| `No HTF data` | Check the symbol mapping in `data_connector.py` (`XAU/USD` → `XAU_USD`) |
+| Railway crash loop | Check the logs → are the three variables set correctly? |
