@@ -65,6 +65,11 @@ class TelegramNotifier:
         risk_p = abs(sig.entry_price - sig.sl_price) / pip
         rwd_p  = abs(sig.tp2 - sig.entry_price) / pip
 
+        # FVG is optional confluence — only show the line when one was present.
+        fvg_line = ""
+        if sig.fvg_high and sig.fvg_low:
+            fvg_line = f"📦 *FVG:*     `{sig.fvg_low:.5f} – {sig.fvg_high:.5f}`\n"
+
         msg = (
             f"🚨 *MSS SIGNAL* {arrow}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -79,7 +84,7 @@ class TelegramNotifier:
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📐 *Risk:*    `{risk_p:.0f} pips`\n"
             f"💵 *Reward:*  `{rwd_p:.0f} pips`\n"
-            f"📦 *FVG:*     `{sig.fvg_low:.5f} – {sig.fvg_high:.5f}`\n"
+            f"{fvg_line}"
             f"🔰 *MSS:*     `{sig.mss_level:.5f}`\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"⚠️ _Signal only — verify before trading_"

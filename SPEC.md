@@ -104,3 +104,29 @@ data path more reliable. No new dependencies.
 - Pruning invalidated order blocks (bounded by the monthly migration; pure
   housekeeping, not a reliability gain — deliberately skipped).
 - Switching tap detection to LTF candles (would need an extra fetch per scan).
+
+---
+
+# Round 3 — Confirmation = displacement + MSS (PR #3)
+
+Owner request: HTF zone on H4/H2/H1, confirmation on M15/M30/M5 "with
+displacement and MSS only". The Fair Value Gap was a mandatory phase between
+displacement and MSS and was suppressing valid signals.
+
+## Acceptance Criteria (binary testable)
+
+- [ ] **AC15 — FVG is no longer required:** a watch that gets displacement and an
+  MSS but no FVG produces a signal. Test: LTF frame with displacement + MSS but
+  no FVG → `process` returns a Signal (before: returned nothing).
+- [ ] **AC16 — displacement still required:** no displacement → no signal. Test:
+  flat LTF frame → `process` returns no signal.
+- [ ] **AC17 — MSS still required:** displacement present but no MSS break → no
+  signal. Test: displacement without the swing break → `process` returns nothing.
+- [ ] **AC18 — FVG recorded as confluence when present:** if an FVG does exist at
+  displacement, it is still captured on the signal (fvg_high/fvg_low set) and the
+  Telegram signal shows the FVG line only when present.
+
+## Out of Scope (Round 3)
+
+- BOS-anchored HTF order-block selection and most-recent-vs-strongest (offered as
+  a later upgrade; owner did not request it in this round).

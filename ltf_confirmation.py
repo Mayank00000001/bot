@@ -115,25 +115,27 @@ class LTFConfirmationEngine:
         return len(self._watches)
 
     def _evaluate(self, watch: PendingWatch, df: pd.DataFrame) -> Optional[Signal]:
-        # Phase 2: Displacement
+        # Confirmation = displacement + MSS. FVG is optional confluence only
+        # (recorded for the signal/chart when present, never a gate).
+
+        # Phase 1: Displacement (required)
         if not watch.displacement_confirmed:
             idx = self._find_displacement(df, watch.ob.direction)
             if idx == -1:
                 return None
             watch.displacement_confirmed = True
             watch.displacement_candle_idx = idx
-
-        # Phase 3: FVG
-        if not watch.fvg_confirmed:
-            fvg = self._find_fvg(df, watch.displacement_candle_idx, watch.ob.direction)
-            if fvg is None:
-                return None
-            watch.fvg_confirmed = True
-            watch.fvg_high, watch.fvg_low = fvg
+            # Swing level to break for the MSS check — captured once, when
+            # displacement first confirms (was previously set in the FVG block).
             watch.swing_level = self._get_swing_level(df, watch.ob.direction)
-            log.debug(f"[LTF] Phase 3 ✓ FVG [{watch.fvg_low:.5f}–{watch.fvg_high:.5f}]")
+            # Optional FVG confluence: record it if it is there, but do not block.
+            fvg = self._find_fvg(df, watch.displacement_candle_idx, watch.ob.direction)
+            if fvg is not None:
+                watch.fvg_confirmed = True
+                watch.fvg_high, watch.fvg_low = fvg
+                log.debug(f"[LTF] FVG confluence [{watch.fvg_low:.5f}–{watch.fvg_high:.5f}]")
 
-        # Phase 4: MSS
+        # Phase 2: MSS (required)
         if not self._check_mss(df, watch.swing_level, watch.ob.direction):
             return None
 
