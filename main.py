@@ -45,23 +45,23 @@ def load_config(path: str = "config.yaml") -> dict:
             cfg = yaml.safe_load(f)
     else:
         # config.yaml nahi hai toh default structure banao
+        # Fallback used only when config.yaml is missing — kept in sync with the
+        # shipped config.yaml so behaviour does not silently diverge.
         cfg = {
-            "pairs": ["XAU/USD","EUR/USD","GBP/USD","USD/JPY","AUD/USD","USD/CAD","GBP/JPY"],
+            "pairs": ["XAU/USD", "SPX", "NDX"],
             "cascades": [
-                {"htf": "1week", "ltf": "4h"},
-                {"htf": "1day",  "ltf": "1h"},
-                {"htf": "4h",    "ltf": "15min"},
-                {"htf": "1h",    "ltf": "5min"},
+                {"htf": "4h", "ltf": "15min"},
+                {"htf": "2h", "ltf": "30min"},
+                {"htf": "1h", "ltf": "5min"},
             ],
             "strategy": {
                 "displacement_multiplier": 1.5,
                 "min_displacement_candles": 2,
                 "swing_pivot_bars": 2,
                 "signal_timeout_minutes": 15,
-                "ob_mitigation": "candle_close",
                 "max_obs_per_pair": 5,
             },
-            "scan_interval_seconds": 900,
+            "scan_interval_seconds": 300,
             "chart": {"output_dir": "charts"},
             "telegram": {},
             "oanda": {},
@@ -162,7 +162,9 @@ class SignalScanner:
                 try:
                     self._scan_cascade(sym, htf, ltf)
                 except Exception as e:
-                    log.error(f"Error scanning {sym} {htf}→{ltf}: {e}")
+                    # exc_info=True: without the traceback a swallowed error here
+                    # (e.g. a missing method) is nearly invisible in the logs.
+                    log.error(f"Error scanning {sym} {htf}→{ltf}: {e}", exc_info=True)
 
         log.info("--- Scan complete ---")
 
@@ -188,7 +190,13 @@ class SignalScanner:
         if current is None:
             return
 
-        tapped = detector.check_tap(current)
+        # Pass the latest HTF candle range too, so an intra-scan wick into the
+        # zone counts as a tap even when the sampled price is outside it.
+        tapped = detector.check_tap(
+            current,
+            candle_low=float(df_htf["low"].iloc[-1]),
+            candle_high=float(df_htf["high"].iloc[-1]),
+        )
         for ob in tapped:
             if engine.is_watching(ob.ob_id):
                 continue
@@ -261,9 +269,9 @@ def main() -> None:
     # Startup alert
     pairs    = cfg.get("pairs", [])
     cascades = [f"{c['htf']}→{c['ltf']}" for c in cfg.get("cascades", [])]
-    tg.send_startup(pairs, cascades)
+    interval = cfg.get("scan_interval_seconds", 300)
+    tg.send_startup(pairs, cascades, interval_minutes=interval // 60)
 
-    interval = cfg.get("scan_interval_seconds", 900)
     log.info(f"Bot live! Scan interval: {interval}s ({interval//60} min)")
 
     # Main loop

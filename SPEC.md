@@ -68,3 +68,39 @@ configurable DB path).
 
 No library replaces the domain fix. Persistence reuses the Python stdlib
 `sqlite3` (no third-party dependency). Build limited to the bot's own logic.
+
+---
+
+# Round 2 — Reliability improvements (PR #2, stacked on PR #1)
+
+Findings from the full-codebase review. Focus: make the core tap detection and
+data path more reliable. No new dependencies.
+
+## Acceptance Criteria (binary testable)
+
+- [x] **AC8 — range-based tap:** A tap fires when the latest candle's [low, high]
+  range overlaps the OB zone, even if the sampled price is outside the zone
+  (catches intra-scan wicks the 5-min sample misses). Test: OB zone [104,105],
+  price 106 (outside), candle low=103/high=106 → `check_tap` returns the OB.
+- [x] **AC9 — OANDA transient retry:** `DataConnector` retries GET requests on
+  timeout / connection error / 429 / 5xx with backoff, then returns None. Test:
+  a stub session failing once (500) then 200 yields data on the retry.
+- [x] **AC10 — cascade errors log traceback:** `scan_once`'s per-cascade handler
+  logs with `exc_info=True`. Verified by code (a swallowed `AttributeError` now
+  shows its stack — the class of bug that hid the original defect).
+- [x] **AC11 — error alerts are Markdown-safe:** `send_error` sends without
+  `parse_mode`, so exception text containing `_`/`*`/`[` cannot 400 the alert.
+  Test: captured payload for `send_error` has no `parse_mode`.
+- [x] **AC12 — startup shows the real interval:** `send_startup` reports the
+  configured scan interval, not a hardcoded "15 minutes". Test: captured payload
+  contains the passed interval.
+- [x] **AC13 — dead sort removed / detection unchanged:** the no-op `.sort()`
+  before `max()` in `_scan` is removed; detection output is unchanged (AC6 test).
+- [x] **AC14 — fallback config matches config.yaml:** the in-code default config
+  in `load_config` matches the shipped `config.yaml` (pairs, cascades, interval).
+
+## Out of Scope (Round 2)
+
+- Pruning invalidated order blocks (bounded by the monthly migration; pure
+  housekeeping, not a reliability gain — deliberately skipped).
+- Switching tap detection to LTF candles (would need an extra fetch per scan).

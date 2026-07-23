@@ -54,6 +54,13 @@ class OrderBlock:
         # bool() so a numpy scalar input does not leak a numpy.bool_ out.
         return bool(self.ob_low <= price <= self.ob_high)
 
+    def contains_range(self, low: float, high: float) -> bool:
+        """True if a candle's [low, high] range overlaps the OB body zone.
+
+        Catches intra-scan wicks into the zone that a single price sample misses.
+        """
+        return bool(low <= self.ob_high and high >= self.ob_low)
+
     def closed_inside(self, candle: pd.Series) -> bool:
         """True if the candle CLOSED inside the body zone.
 
@@ -115,15 +122,33 @@ class OrderBlockDetector:
         self._save_state()
         return new_obs
 
-    def check_tap(self, price: float) -> List[OrderBlock]:
-        """Return OBs tapped by ``price`` (in-zone, not invalidated, not yet
-        tapped). Pure query — call ``mark_tapped`` once the LTF watch is armed
-        to latch the OB so it taps at most once. Keeping the latch separate from
-        the query means a failed alert cannot strand an OB tapped-but-unwatched.
+    def check_tap(
+        self,
+        price: float,
+        candle_low: Optional[float] = None,
+        candle_high: Optional[float] = None,
+    ) -> List[OrderBlock]:
+        """Return OBs tapped (in-zone, not invalidated, not yet tapped).
+
+        A tap is either the sampled ``price`` inside the zone OR — when the
+        latest candle's ``candle_low``/``candle_high`` are given — that candle's
+        range overlapping the zone. The candle range catches intra-scan wicks the
+        5-minute price sample misses. Pure query — call ``mark_tapped`` once the
+        LTF watch is armed to latch the OB so it taps at most once. Keeping the
+        latch separate from the query means a failed alert cannot strand an OB
+        tapped-but-unwatched.
         """
+        def _is_tap(ob: OrderBlock) -> bool:
+            if ob.contains_price(price):
+                return True
+            if (candle_low is not None and candle_high is not None
+                    and ob.contains_range(candle_low, candle_high)):
+                return True
+            return False
+
         return [
             ob for ob in self._obs
-            if not ob.invalidated and not ob.tapped and ob.contains_price(price)
+            if not ob.invalidated and not ob.tapped and _is_tap(ob)
         ]
 
     def mark_tapped(self, ob: OrderBlock) -> None:
@@ -235,13 +260,11 @@ class OrderBlockDetector:
         # Keep only the strongest bullish + strongest bearish candidate
         # (the most recent, most significant displacement — matches real OB logic)
         if bullish_candidates:
-            bullish_candidates.sort(key=lambda x: (x[1], x[0]))  # prioritize recency, then strength
             strongest = max(bullish_candidates, key=lambda x: x[0])
             new_obs.append(strongest[2])
             log.info(f"[OB] 🟢 Bullish — {self.symbol}/{self.htf} [{strongest[2].ob_low:.5f}–{strongest[2].ob_high:.5f}] @ {strongest[2].candle_time} (strength={strongest[0]:.3f})")
 
         if bearish_candidates:
-            bearish_candidates.sort(key=lambda x: (x[1], x[0]))
             strongest = max(bearish_candidates, key=lambda x: x[0])
             new_obs.append(strongest[2])
             log.info(f"[OB] 🔴 Bearish — {self.symbol}/{self.htf} [{strongest[2].ob_low:.5f}–{strongest[2].ob_high:.5f}] @ {strongest[2].candle_time} (strength={strongest[0]:.3f})")
