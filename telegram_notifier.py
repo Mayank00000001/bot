@@ -28,7 +28,7 @@ class TelegramNotifier:
             log.error(f"Telegram test fail: {e}")
         return False
 
-    def send_startup(self, pairs: list, cascades: list) -> None:
+    def send_startup(self, pairs: list, cascades: list, interval_minutes: int = 5) -> None:
         pairs_str = "\n".join(f"   • `{p}`" for p in pairs)
         casc_str  = "\n".join(f"   • `{c}`" for c in cascades)
         self._text(
@@ -36,7 +36,7 @@ class TelegramNotifier:
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"📌 *Pairs:*\n{pairs_str}\n\n"
             f"🕯 *Cascades:*\n{casc_str}\n\n"
-            f"🟢 Scanning every 15 minutes..."
+            f"🟢 Scanning every {interval_minutes} minutes..."
         )
 
     def send_ob_detected(self, symbol: str, htf: str, direction: str, ob_low: float, ob_high: float) -> None:
@@ -86,20 +86,27 @@ class TelegramNotifier:
         )
         if chart_path and Path(chart_path).exists():
             self._photo(msg, chart_path)
-            try: os.remove(chart_path)
-            except: pass
+            try:
+                os.remove(chart_path)
+            except OSError:
+                pass
         else:
             self._text(msg)
 
     def send_error(self, ctx: str, err: str) -> None:
-        self._text(f"🆘 *Error*\n`{ctx}`\n`{err[:200]}`")
+        # Plain text (no parse_mode): exception text may contain Markdown
+        # metacharacters (_ * [ `) that would otherwise 400 the alert itself.
+        self._text(f"🆘 Error\n{ctx}\n{err[:200]}", parse_mode=None)
 
-    def _text(self, text: str) -> None:
+    def _text(self, text: str, parse_mode: Optional[str] = "Markdown") -> None:
+        payload = {
+            "chat_id": self._chat_id, "text": text,
+            "disable_web_page_preview": True,
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         try:
-            r = requests.post(f"{self._api}/sendMessage", json={
-                "chat_id": self._chat_id, "text": text,
-                "parse_mode": "Markdown", "disable_web_page_preview": True,
-            }, timeout=15)
+            r = requests.post(f"{self._api}/sendMessage", json=payload, timeout=15)
             if not r.json().get("ok"):
                 log.error(f"Telegram fail: {r.text}")
         except Exception as e:

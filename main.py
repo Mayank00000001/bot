@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import os
 import yaml
@@ -19,6 +19,7 @@ from ob_detector import OrderBlockDetector
 from ltf_confirmation import LTFConfirmationEngine
 from chart_generator import generate_chart
 from telegram_notifier import TelegramNotifier
+from state_store import StateStore
 from logger import get_logger
 
 log = get_logger("main")
@@ -44,23 +45,23 @@ def load_config(path: str = "config.yaml") -> dict:
             cfg = yaml.safe_load(f)
     else:
         # config.yaml nahi hai toh default structure banao
+        # Fallback used only when config.yaml is missing — kept in sync with the
+        # shipped config.yaml so behaviour does not silently diverge.
         cfg = {
-            "pairs": ["XAU/USD","EUR/USD","GBP/USD","USD/JPY","AUD/USD","USD/CAD","GBP/JPY"],
+            "pairs": ["XAU/USD", "SPX", "NDX"],
             "cascades": [
-                {"htf": "1week", "ltf": "4h"},
-                {"htf": "1day",  "ltf": "1h"},
-                {"htf": "4h",    "ltf": "15min"},
-                {"htf": "1h",    "ltf": "5min"},
+                {"htf": "4h", "ltf": "15min"},
+                {"htf": "2h", "ltf": "30min"},
+                {"htf": "1h", "ltf": "5min"},
             ],
             "strategy": {
                 "displacement_multiplier": 1.5,
                 "min_displacement_candles": 2,
                 "swing_pivot_bars": 2,
                 "signal_timeout_minutes": 15,
-                "ob_mitigation": "candle_close",
                 "max_obs_per_pair": 5,
             },
-            "scan_interval_seconds": 900,
+            "scan_interval_seconds": 300,
             "chart": {"output_dir": "charts"},
             "telegram": {},
             "oanda": {},
@@ -122,6 +123,8 @@ class SignalScanner:
         self._tg   = tg
         self._strat = cfg.get("strategy", {})
 
+        # Single SQLite store shared by all detectors and LTF engines.
+        self._store = StateStore()
         self._ob_det: Dict[Tuple[str, str], OrderBlockDetector] = {}
         self._ltf_eng: Dict[Tuple[str, str, str], LTFConfirmationEngine] = {}
         self._setup()
@@ -130,7 +133,6 @@ class SignalScanner:
         pairs     = self._cfg.get("pairs", [])
         cascades  = self._cfg.get("cascades", [])
         max_obs   = self._strat.get("max_obs_per_pair", 5)
-        mitmode   = self._strat.get("ob_mitigation", "candle_close")
         timeout   = self._strat.get("signal_timeout_minutes", 15)
 
         for sym in pairs:
@@ -140,11 +142,12 @@ class SignalScanner:
                 if key_ob not in self._ob_det:
                     self._ob_det[key_ob] = OrderBlockDetector(
                         symbol=sym, htf=htf,
-                        max_obs=max_obs, mitigation_mode=mitmode,
+                        max_obs=max_obs, store=self._store,
                     )
                 self._ltf_eng[(sym, htf, ltf)] = LTFConfirmationEngine(
                     symbol=sym, htf=htf, ltf=ltf,
                     signal_timeout_minutes=timeout,
+                    store=self._store,
                 )
         log.info(f"Ready: {len(self._ob_det)} OB detectors, {len(self._ltf_eng)} LTF engines")
 
@@ -159,7 +162,9 @@ class SignalScanner:
                 try:
                     self._scan_cascade(sym, htf, ltf)
                 except Exception as e:
-                    log.error(f"Error scanning {sym} {htf}→{ltf}: {e}")
+                    # exc_info=True: without the traceback a swallowed error here
+                    # (e.g. a missing method) is nearly invisible in the logs.
+                    log.error(f"Error scanning {sym} {htf}→{ltf}: {e}", exc_info=True)
 
         log.info("--- Scan complete ---")
 
@@ -185,13 +190,23 @@ class SignalScanner:
         if current is None:
             return
 
-        tapped = detector.check_tap(current)
+        # Pass the latest HTF candle range too, so an intra-scan wick into the
+        # zone counts as a tap even when the sampled price is outside it.
+        tapped = detector.check_tap(
+            current,
+            candle_low=float(df_htf["low"].iloc[-1]),
+            candle_high=float(df_htf["high"].iloc[-1]),
+        )
         for ob in tapped:
             if engine.is_watching(ob.ob_id):
                 continue
+            # Arm the watch and latch the OB BEFORE the (best-effort) Telegram
+            # alert, so a transient send failure cannot strand the OB
+            # tapped-but-unwatched — the MSS pipeline proceeds regardless.
+            engine.add_watch(ob)
+            detector.mark_tapped(ob)
             log.info(f"[TAP] {sym} @ {current:.5f} → {ob.direction.upper()} OB {htf}→{ltf}")
             self._tg.send_tap_alert(sym, htf, ltf, ob.direction, current)
-            engine.add_watch(ob)
 
         # LTF confirmation
         active = engine.active_count()
@@ -254,9 +269,9 @@ def main() -> None:
     # Startup alert
     pairs    = cfg.get("pairs", [])
     cascades = [f"{c['htf']}→{c['ltf']}" for c in cfg.get("cascades", [])]
-    tg.send_startup(pairs, cascades)
+    interval = cfg.get("scan_interval_seconds", 300)
+    tg.send_startup(pairs, cascades, interval_minutes=interval // 60)
 
-    interval = cfg.get("scan_interval_seconds", 900)
     log.info(f"Bot live! Scan interval: {interval}s ({interval//60} min)")
 
     # Main loop

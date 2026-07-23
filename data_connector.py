@@ -70,7 +70,9 @@ class DataConnector:
         df = conn.get_candles("XAU/USD", "4h")
     """
 
-    REQUEST_DELAY = 0.5  # OANDA rate limit generous hai — 0.5s safe gap
+    REQUEST_DELAY = 0.5   # OANDA rate limit is generous — 0.5s safe gap
+    MAX_RETRIES = 2       # retry transient failures (timeout / connection / 429 / 5xx)
+    RETRY_BACKOFF = 1.0   # initial backoff seconds, doubled on each retry
 
     def __init__(self, api_token: str) -> None:
         self._token = api_token
@@ -122,23 +124,17 @@ class DataConnector:
             return None
 
         n = count or CANDLE_COUNT.get(timeframe, 200)
-        self._wait_rate_limit()
+        res = self._request(
+            f"{BASE_URL}/instruments/{instrument}/candles",
+            {"count": n, "granularity": granularity, "price": "M"},  # M = mid prices
+            timeout=15,
+        )
+        if res is None or res.status_code != 200:
+            if res is not None:
+                log.warning(f"OANDA error {symbol}/{timeframe}: {res.status_code} — {res.text[:200]}")
+            return None
 
         try:
-            res = self._session.get(
-                f"{BASE_URL}/instruments/{instrument}/candles",
-                params={
-                    "count":       n,
-                    "granularity": granularity,
-                    "price":       "M",   # Mid prices (bid+ask average)
-                },
-                timeout=15,
-            )
-
-            if res.status_code != 200:
-                log.warning(f"OANDA error {symbol}/{timeframe}: {res.status_code} — {res.text[:200]}")
-                return None
-
             data = res.json()
             candles = data.get("candles", [])
             if not candles:
@@ -166,34 +162,62 @@ class DataConnector:
             log.debug(f"Fetched {len(df)} candles: {symbol}/{timeframe}")
             return df
 
-        except requests.exceptions.Timeout:
-            log.error(f"Timeout fetching {symbol}/{timeframe}")
-            return None
         except Exception as e:
-            log.error(f"Error fetching {symbol}/{timeframe}: {e}")
+            log.error(f"Error parsing {symbol}/{timeframe}: {e}")
             return None
 
     def get_current_price(self, symbol: str) -> Optional[float]:
-        """Symbol ka latest mid price fetch karo."""
+        """Fetch the latest mid price for a symbol."""
         instrument = SYMBOL_MAP.get(symbol)
         if not instrument:
             return None
 
-        self._wait_rate_limit()
+        res = self._request(
+            f"{BASE_URL}/instruments/{instrument}/candles",
+            {"count": 1, "granularity": "M1", "price": "M"},
+            timeout=10,
+        )
+        if res is None or res.status_code != 200:
+            return None
         try:
-            res = self._session.get(
-                f"{BASE_URL}/instruments/{instrument}/candles",
-                params={"count": 1, "granularity": "M1", "price": "M"},
-                timeout=10,
-            )
-            if res.status_code != 200:
-                return None
-            data = res.json()
-            candles = data.get("candles", [])
+            candles = res.json().get("candles", [])
             if candles:
                 return float(candles[-1]["mid"]["c"])
         except Exception as e:
-            log.error(f"Price fetch error {symbol}: {e}")
+            log.error(f"Price parse error {symbol}: {e}")
+        return None
+
+    def _request(self, url: str, params: dict, timeout: int) -> Optional[requests.Response]:
+        """GET with a small retry/backoff on transient failures.
+
+        Retries on timeout, connection error, HTTP 429 (respecting Retry-After)
+        and 5xx. Returns the final Response (which the caller checks for 200), or
+        None if every attempt failed to produce a response. Non-retryable client
+        errors (4xx other than 429) are returned immediately for the caller to log.
+        """
+        delay = self.RETRY_BACKOFF
+        last_exc: Optional[Exception] = None
+        for attempt in range(self.MAX_RETRIES + 1):
+            self._wait_rate_limit()
+            try:
+                res = self._session.get(url, params=params, timeout=timeout)
+            except requests.exceptions.RequestException as e:
+                last_exc = e
+            else:
+                if res.status_code < 500 and res.status_code != 429:
+                    return res  # success or non-retryable client error
+                last_exc = None
+                if res.status_code == 429:
+                    delay = float(res.headers.get("Retry-After", delay))
+                log.warning(
+                    f"Transient HTTP {res.status_code}, "
+                    f"attempt {attempt + 1}/{self.MAX_RETRIES + 1}"
+                )
+            if attempt < self.MAX_RETRIES:
+                time.sleep(delay)
+                delay *= 2
+        if last_exc is not None:
+            log.error(f"Request failed after {self.MAX_RETRIES + 1} attempts: {last_exc}")
         return None
 
     def _wait_rate_limit(self) -> None:
