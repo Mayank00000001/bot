@@ -116,18 +116,23 @@ class OrderBlockDetector:
         return new_obs
 
     def check_tap(self, price: float) -> List[OrderBlock]:
-        """Return OBs newly tapped by ``price`` (in-zone, not invalidated, not
-        yet tapped). Latches ``tapped`` so each OB taps at most once."""
-        tapped = [
+        """Return OBs tapped by ``price`` (in-zone, not invalidated, not yet
+        tapped). Pure query — call ``mark_tapped`` once the LTF watch is armed
+        to latch the OB so it taps at most once. Keeping the latch separate from
+        the query means a failed alert cannot strand an OB tapped-but-unwatched.
+        """
+        return [
             ob for ob in self._obs
             if not ob.invalidated and not ob.tapped and ob.contains_price(price)
         ]
-        for ob in tapped:
-            ob.tapped = True
-            ob.tap_count += 1
-        if tapped:
-            self._save_state()
-        return tapped
+
+    def mark_tapped(self, ob: OrderBlock) -> None:
+        """Latch an OB as tapped (persisted) so later scans do not re-tap it."""
+        if ob.tapped:
+            return
+        ob.tapped = True
+        ob.tap_count += 1
+        self._save_state()
 
     def get_active_obs(self) -> List[OrderBlock]:
         """OBs that have not been invalidated (still in play)."""

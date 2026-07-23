@@ -192,9 +192,13 @@ class SignalScanner:
         for ob in tapped:
             if engine.is_watching(ob.ob_id):
                 continue
+            # Arm the watch and latch the OB BEFORE the (best-effort) Telegram
+            # alert, so a transient send failure cannot strand the OB
+            # tapped-but-unwatched — the MSS pipeline proceeds regardless.
+            engine.add_watch(ob)
+            detector.mark_tapped(ob)
             log.info(f"[TAP] {sym} @ {current:.5f} → {ob.direction.upper()} OB {htf}→{ltf}")
             self._tg.send_tap_alert(sym, htf, ltf, ob.direction, current)
-            engine.add_watch(ob)
 
         # LTF confirmation
         active = engine.active_count()

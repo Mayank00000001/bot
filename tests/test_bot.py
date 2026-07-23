@@ -111,9 +111,10 @@ def test_ac3_tap_fires_once():
     det._obs = [ob]
 
     first = det.check_tap(104.5)
-    second = det.check_tap(104.5)
-
     assert len(first) == 1
+    det.mark_tapped(first[0])   # latch happens after the watch is armed
+
+    second = det.check_tap(104.5)
     assert second == []
     assert ob.tapped is True
     assert ob.tap_count == 1
@@ -186,7 +187,7 @@ def test_ac4_deleted_watch_gone_after_restart(tmp_path):
 
 def test_ac5_sqlite3_is_stdlib_and_store_works(tmp_path):
     import sqlite3  # stdlib import must succeed
-    assert sqlite3.sqlite_version_info  # library is functional
+    assert sqlite3.sqlite_version_info >= (3, 0, 0)  # library is functional
 
     store = StateStore(str(tmp_path / "bot.db"))
     store.save_obs("XAU/USD", "1h", [])
@@ -277,5 +278,7 @@ def test_ac7_tap_loop_runs_without_raising():
         if eng.is_watching(o.ob_id):
             continue
         eng.add_watch(o)
+        det.mark_tapped(o)
 
     assert eng.is_watching(ob.ob_id) is True
+    assert ob.tapped is True
