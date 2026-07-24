@@ -130,3 +130,30 @@ displacement and MSS and was suppressing valid signals.
 
 - BOS-anchored HTF order-block selection and most-recent-vs-strongest (offered as
   a later upgrade; owner did not request it in this round).
+
+---
+
+# Round 4 — Watch window = 3 LTF candles (PR #4)
+
+Owner rule: a tapped order block must always get **3 candles of the lower
+timeframe** to confirm — so the window differs per cascade. The previous flat
+`signal_timeout_minutes: 15` gave the 5min cascade 3 candles, the 15min cascade
+1 candle and the 30min cascade less than one, so those cascades could never
+confirm before the watch expired.
+
+## Acceptance Criteria (binary testable)
+
+- [ ] **AC19 — window scales with the LTF:** timeout = candles × LTF duration.
+  Test: engine on `5min` → 900s, `15min` → 2700s, `30min` → 5400s.
+- [ ] **AC20 — candle count configurable:** `signal_timeout_candles` drives it.
+  Test: `timeout_candles=5` on a `5min` cascade → 1500s.
+- [ ] **AC21 — unknown timeframe degrades safely:** an unmapped LTF logs a
+  warning and falls back instead of crashing. Test: engine on `7min` builds and
+  yields a positive timeout.
+- [ ] **AC22 — expiry follows the scaled window:** on a `30min` cascade a watch
+  tapped 80 min ago is still alive; at 95 min it is expired.
+
+## Out of Scope (Round 4)
+
+- Changing displacement/MSS logic itself (unchanged).
+- BOS-anchored order-block selection (still parked from Round 3).

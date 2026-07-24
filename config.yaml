@@ -27,7 +27,11 @@ strategy:
   displacement_multiplier: 1.5
   min_displacement_candles: 2
   swing_pivot_bars: 2
-  signal_timeout_minutes: 15
+  # How long a tapped order block waits for displacement + MSS, expressed in
+  # LOWER-timeframe candles (so the window scales per cascade):
+  #   3 candles → 5min LTF = 15 min · 15min LTF = 45 min · 30min LTF = 90 min
+  # A flat minute value gave the 30min cascade less than one candle to confirm.
+  signal_timeout_candles: 3
   # NOTE: `ob_mitigation` is no longer used. Order blocks are now retired only
   # when price CLOSES beyond the protective wick (see ob_detector.py). A close
   # inside the zone is treated as a tap, not an invalidation. Kept for

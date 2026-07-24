@@ -21,6 +21,25 @@ DISPLACEMENT_MULTIPLIER = 1.5
 SWING_PIVOT_BARS = 2
 MIN_CANDLES = 20
 
+# A tapped order block gets N lower-timeframe candles to produce displacement +
+# MSS. The window must scale with the LTF: a flat 15 minutes gave the M5 cascade
+# 3 candles but the M30 cascade less than one, so those cascades could never
+# confirm in time.
+DEFAULT_TIMEOUT_CANDLES = 3
+
+TIMEFRAME_MINUTES = {
+    "5min": 5,
+    "15min": 15,
+    "30min": 30,
+    "1h": 60,
+    "2h": 120,
+    "4h": 240,
+    "1day": 1440,
+    "1week": 10080,
+}
+# Used only when a cascade names a timeframe missing from the table above.
+FALLBACK_TIMEFRAME_MINUTES = 5
+
 
 @dataclass
 class Signal:
@@ -62,17 +81,30 @@ class LTFConfirmationEngine:
         self,
         symbol: str, htf: str, ltf: str,
         sl_buffer_pct: float = 0.0005,
-        signal_timeout_minutes: int = 15,
+        timeout_candles: int = DEFAULT_TIMEOUT_CANDLES,
         store: Optional[StateStore] = None,
     ) -> None:
         self.symbol = symbol
         self.htf = htf
         self.ltf = ltf
         self.sl_buffer_pct = sl_buffer_pct
-        self.timeout_seconds = signal_timeout_minutes * 60
+        self.timeout_candles = timeout_candles
+        self.timeout_seconds = timeout_candles * self._ltf_minutes(ltf) * 60
         self._store = store
         self._watches: Dict[str, PendingWatch] = {}
         self._load_watches()
+
+    @staticmethod
+    def _ltf_minutes(ltf: str) -> int:
+        """Candle duration of the lower timeframe, in minutes."""
+        minutes = TIMEFRAME_MINUTES.get(ltf)
+        if minutes is None:
+            log.warning(
+                f"[LTF] Unknown timeframe '{ltf}' — assuming "
+                f"{FALLBACK_TIMEFRAME_MINUTES} min per candle for the watch timeout"
+            )
+            return FALLBACK_TIMEFRAME_MINUTES
+        return minutes
 
     def is_watching(self, ob_id: str) -> bool:
         """True if an armed watch exists for this OB (used by the tap loop)."""
