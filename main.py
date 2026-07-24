@@ -58,7 +58,7 @@ def load_config(path: str = "config.yaml") -> dict:
                 "displacement_multiplier": 1.5,
                 "min_displacement_candles": 2,
                 "swing_pivot_bars": 2,
-                "signal_timeout_minutes": 15,
+                "signal_timeout_candles": 3,
                 "max_obs_per_pair": 5,
             },
             "scan_interval_seconds": 300,
@@ -133,7 +133,8 @@ class SignalScanner:
         pairs     = self._cfg.get("pairs", [])
         cascades  = self._cfg.get("cascades", [])
         max_obs   = self._strat.get("max_obs_per_pair", 5)
-        timeout   = self._strat.get("signal_timeout_minutes", 15)
+        # Watch window is N lower-timeframe candles, so it scales per cascade.
+        timeout_candles = self._strat.get("signal_timeout_candles", 3)
 
         for sym in pairs:
             for c in cascades:
@@ -146,10 +147,16 @@ class SignalScanner:
                     )
                 self._ltf_eng[(sym, htf, ltf)] = LTFConfirmationEngine(
                     symbol=sym, htf=htf, ltf=ltf,
-                    signal_timeout_minutes=timeout,
+                    timeout_candles=timeout_candles,
                     store=self._store,
                 )
         log.info(f"Ready: {len(self._ob_det)} OB detectors, {len(self._ltf_eng)} LTF engines")
+        # Surface the resolved windows so the live log shows them per timeframe.
+        windows = {e.ltf: e.timeout_seconds // 60 for e in self._ltf_eng.values()}
+        log.info(
+            f"Watch timeout = {timeout_candles} LTF candles → "
+            + ", ".join(f"{tf}: {mins}min" for tf, mins in sorted(windows.items()))
+        )
 
     def scan_once(self) -> None:
         pairs    = self._cfg.get("pairs", [])

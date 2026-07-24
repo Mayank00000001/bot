@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — Watch window scales with the lower timeframe
+
+### Changed
+
+- **A tapped order block now gets 3 *lower-timeframe candles* to confirm**, not a
+  flat 15 minutes. The window therefore differs per cascade: `5min` → 15 min,
+  `15min` → 45 min, `30min` → 90 min. The old flat window gave the 15min cascade
+  a single candle and the 30min cascade less than one, so those cascades could
+  effectively never confirm before the watch expired.
+- **Config key renamed:** `strategy.signal_timeout_minutes` →
+  `strategy.signal_timeout_candles` (default `3`). The resolved windows are
+  logged at startup (`Watch timeout = 3 LTF candles → 5min: 15min, …`).
+
+### Migration
+
+- Replace `signal_timeout_minutes: 15` with `signal_timeout_candles: 3` in
+  `config.yaml`. No environment variables change.
+
 ## [Unreleased] — LTF tap fix + SQLite state persistence
 
 ### Fixed
