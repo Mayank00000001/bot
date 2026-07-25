@@ -157,3 +157,30 @@ confirm before the watch expired.
 
 - Changing displacement/MSS logic itself (unchanged).
 - BOS-anchored order-block selection (still parked from Round 3).
+
+---
+
+# Round 5 — Wick-to-wick zone + no blow-through taps (PR #5)
+
+Owner feedback (with a TradingView ruler): the detected zone was the OB candle's
+*body* (a thin sliver), but the intended zone is the candle's *full range, wick
+to wick*. Separately, an "OB TAPPED" fired far below the zone because a large
+1h candle blew straight THROUGH it — a break of the level, not a tap.
+
+## Acceptance Criteria (binary testable)
+
+- [ ] **AC23 — zone is wick-to-wick:** a detected OB's zone spans the OB candle's
+  full range (low..high), not its body (open..close). Test: detect a bullish OB
+  from a candle open=105 high=105.5 low=103 close=104 → ob_low=103, ob_high=105.5.
+- [ ] **AC24 — blow-through is not a tap:** `contains_range` returns False when
+  the candle range engulfs the whole zone (spans past both edges). Test: zone
+  [104,105] with candle low=100 high=110 → False; a wick into the zone
+  (low=104.5 high=106) → True; no overlap (106..108) → False.
+- [ ] **AC25 — price tap works on the full-range zone:** `contains_price` uses
+  the wick-to-wick bounds. Test: zone [103,105.5] → 104 inside, 102 outside.
+
+## Out of Scope (Round 5)
+
+- BOS-anchored order-block selection (still parked; separate strategy upgrade).
+- Showing the tap price level vs the zone in the "OB TAPPED" message (the alert
+  reports current price; a clarity tweak could be a later follow-up).
