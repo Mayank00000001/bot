@@ -66,3 +66,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   on first run. Order blocks self-heal by re-detection on the next scan.
 - No dependency or environment changes required. Optionally set `STATE_DB_PATH`
   to a mounted volume to make state survive restarts.
+
+## [Unreleased] — Wick-to-wick order-block zones
+
+### Changed
+
+- **Order-block zone is now the candle's full range (wick to wick)**, not just
+  its body. The previous body-only zone was a thin sliver (e.g. ~5 points on an
+  NDX 1h block whose full range was ~90 points), so it rarely matched where the
+  block actually sits. "New OB" messages and charts now show the full zone.
+- **A candle that blows clean through a zone no longer counts as a tap.** The
+  range-based tap (added earlier) fired whenever a candle's range overlapped the
+  zone — including a large candle that crashed straight through it. Such a candle
+  breaks the level rather than tapping it, so it is now excluded; a wick that
+  enters the zone without engulfing it still taps.

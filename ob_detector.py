@@ -50,19 +50,27 @@ class OrderBlock:
     notified: bool = False      # "New OB" Telegram alert already sent
 
     def contains_price(self, price: float) -> bool:
-        """True if price is inside the OB body zone (the tap test)."""
+        """True if price is inside the OB zone (the tap test).
+
+        The zone is the order-block candle's full range, wick to wick.
+        """
         # bool() so a numpy scalar input does not leak a numpy.bool_ out.
         return bool(self.ob_low <= price <= self.ob_high)
 
     def contains_range(self, low: float, high: float) -> bool:
-        """True if a candle's [low, high] range overlaps the OB body zone.
+        """True if a candle TAPPED the zone — its range overlaps the zone but
+        does NOT engulf it.
 
-        Catches intra-scan wicks into the zone that a single price sample misses.
+        Catches intra-scan wicks into the zone that a single price sample misses,
+        while rejecting a candle that blows clean THROUGH the zone (range spans
+        past both edges): that is a break of the level, not a tap.
         """
-        return bool(low <= self.ob_high and high >= self.ob_low)
+        overlaps = low <= self.ob_high and high >= self.ob_low
+        engulfs = low < self.ob_low and high > self.ob_high
+        return bool(overlaps and not engulfs)
 
     def closed_inside(self, candle: pd.Series) -> bool:
-        """True if the candle CLOSED inside the body zone.
+        """True if the candle CLOSED inside the zone.
 
         Used only as the detection freshness filter (has price already returned
         to this OB since it formed?) — not as an invalidation test.
@@ -233,7 +241,9 @@ class OrderBlockDetector:
                         ob = OrderBlock(
                             ob_id=ob_id, symbol=self.symbol, htf=self.htf,
                             direction="bullish",
-                            ob_high=c["open"], ob_low=c["close"],
+                            # Zone = the order-block candle's full range (wick to
+                            # wick), not just its body.
+                            ob_high=c["high"], ob_low=c["low"],
                             wick_high=c["high"], wick_low=c["low"],
                             candle_time=candle_time,
                         )
@@ -248,7 +258,9 @@ class OrderBlockDetector:
                         ob = OrderBlock(
                             ob_id=ob_id, symbol=self.symbol, htf=self.htf,
                             direction="bearish",
-                            ob_high=c["close"], ob_low=c["open"],
+                            # Zone = the order-block candle's full range (wick to
+                            # wick), not just its body.
+                            ob_high=c["high"], ob_low=c["low"],
                             wick_high=c["high"], wick_low=c["low"],
                             candle_time=candle_time,
                         )

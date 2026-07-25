@@ -240,8 +240,11 @@ def test_ac6_detection_still_finds_bullish_ob():
     directions = {ob.direction for ob in new}
     assert "bullish" in directions
     bull = next(ob for ob in new if ob.direction == "bullish")
-    assert bull.ob_low == pytest.approx(104.0)
-    assert bull.ob_high == pytest.approx(105.0)
+    # Zone is the OB candle's full range (wick to wick): candle 12 is
+    # open=105 high=105.5 low=103 close=104, so the zone is [103, 105.5],
+    # not the body [104, 105].
+    assert bull.ob_low == pytest.approx(103.0)
+    assert bull.ob_high == pytest.approx(105.5)
     # The freshly detected, untapped OB taps when price returns into the zone.
     assert len(det.check_tap(104.5)) == 1
 

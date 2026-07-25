@@ -27,8 +27,9 @@ def make_bull_ob(ob_id: str = "XAU/USD_1h_bull_T1") -> OrderBlock:
 def test_ac8_range_tap_when_price_outside_zone():
     det = OrderBlockDetector("XAU/USD", "1h", store=None)
     det._obs = [make_bull_ob()]  # zone [104, 105]
-    # Price 106 is OUTSIDE the zone, but the candle wicked through it (103..106).
-    tapped = det.check_tap(106.0, candle_low=103.0, candle_high=106.0)
+    # Price 106 is OUTSIDE the zone, but the candle wicked down INTO it (low 104.5
+    # sits inside the zone) without engulfing it → a genuine tap.
+    tapped = det.check_tap(106.0, candle_low=104.5, candle_high=106.0)
     assert [o.ob_id for o in tapped] == ["XAU/USD_1h_bull_T1"]
 
 
